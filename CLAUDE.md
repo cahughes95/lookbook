@@ -116,6 +116,17 @@ VITE_SUPABASE_ANON_KEY=
 
 ---
 
+## Session Notes
+> At the start of every new session, update this section with any decisions, preferences, or context established during that conversation so future sessions have full continuity.
+
+- **Email confirmation**: disabled in Supabase dashboard — sign up logs in immediately, no email confirmation step
+- **Commits**: no `Co-Authored-By` line in commit messages
+- **Tailwind v4**: requires `@tailwindcss/vite` plugin in `vite.config.js` — do NOT use PostCSS config approach
+- **Git repo**: initialized inside `lookbook/` (not at Desktop level) — remote is `https://github.com/cahughes95/lookbook`
+- **Testing on mobile**: run `npm run dev -- --host` to expose on local network, phone accesses via the Network URL shown in terminal
+
+---
+
 ## Out of Scope for MVP
 
 - Item titles, descriptions, or prices
