@@ -7,7 +7,6 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
   const [error, setError] = useState('')
-  const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
@@ -15,17 +14,11 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     setError('')
-    setMessage('')
 
     if (isSignUp) {
-      const { data, error } = await supabase.auth.signUp({ email, password })
+      const { error } = await supabase.auth.signUp({ email, password })
       if (error) {
         setError(error.message)
-        setLoading(false)
-      } else if (!data.session) {
-        // Email confirmation required
-        setMessage('Check your email to confirm your account, then sign in.')
-        setIsSignUp(false)
         setLoading(false)
       } else {
         navigate('/')
@@ -69,9 +62,6 @@ export default function Login() {
           {error && (
             <p className="text-red-400 text-xs tracking-wide px-1">{error}</p>
           )}
-          {message && (
-            <p className="text-green-400 text-xs tracking-wide px-1">{message}</p>
-          )}
 
           <button
             type="submit"
@@ -83,7 +73,7 @@ export default function Login() {
         </form>
 
         <button
-          onClick={() => { setIsSignUp(!isSignUp); setError(''); setMessage('') }}
+          onClick={() => { setIsSignUp(!isSignUp); setError('') }}
           className="w-full mt-6 text-white/25 text-xs tracking-wide text-center hover:text-white/40 transition-colors"
         >
           {isSignUp ? 'already have an account? sign in' : "don't have an account? sign up"}

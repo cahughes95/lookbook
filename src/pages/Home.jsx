@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import Rack from '../components/Rack'
+import RackGrid from '../components/RackGrid'
+import ViewToggle from '../components/ViewToggle'
 import AddItemButton from '../components/AddItemButton'
 import AddItemModal from '../components/AddItemModal'
 import ItemDetail from '../components/ItemDetail'
@@ -11,10 +13,19 @@ export default function Home() {
   const [items, setItems] = useState([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [selectedItem, setSelectedItem] = useState(null)
+  const [view, setView] = useState('carousel')
+  const [showScrollHint, setShowScrollHint] = useState(true)
 
   useEffect(() => {
     fetchItems()
   }, [])
+
+  useEffect(() => {
+    if (showScrollHint) {
+      const timer = setTimeout(() => setShowScrollHint(false), 4000)
+      return () => clearTimeout(timer)
+    }
+  }, [showScrollHint])
 
   const fetchItems = async () => {
     const { data } = await supabase
@@ -51,6 +62,7 @@ export default function Home() {
           >
             archive
           </Link>
+          <ViewToggle view={view} onChange={setView} />
           <button
             onClick={handleSignOut}
             className="text-white/20 text-xs tracking-[0.2em] hover:text-white/50 transition-colors"
@@ -61,9 +73,20 @@ export default function Home() {
       </div>
 
       {/* The Rack */}
-      <div className="flex-1 flex items-center min-h-0">
-        <Rack items={items} onItemClick={setSelectedItem} />
-      </div>
+      {view === 'carousel' ? (
+        <div className="flex-1 flex items-start pt-6 min-h-0 relative">
+          <Rack items={items} onItemClick={setSelectedItem} />
+          {showScrollHint && items.length > 0 && (
+            <span className="absolute bottom-8 right-6 pointer-events-none text-white/20 text-[10px] tracking-[0.2em]">
+              drag to browse
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <RackGrid items={items} onItemClick={setSelectedItem} />
+        </div>
+      )}
 
       {/* Floating add button */}
       <AddItemButton onClick={() => setShowAddModal(true)} />
