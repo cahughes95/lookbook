@@ -8,8 +8,8 @@ create table if not exists public.items (
   id          uuid        primary key default gen_random_uuid(),
   vendor_id   uuid        not null references auth.users(id) on delete cascade,
   image_url   text        not null,
-  status      text        not null default 'in_stock'
-                          check (status in ('in_stock', 'archived')),
+  status      text        not null default 'active'
+                          check (status in ('active', 'sold', 'archived')),
   created_at  timestamptz not null default now(),
   archived_at timestamptz
 );

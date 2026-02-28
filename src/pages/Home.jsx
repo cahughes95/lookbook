@@ -31,7 +31,7 @@ export default function Home() {
     const { data } = await supabase
       .from('items')
       .select('*')
-      .eq('status', 'in_stock')
+      .eq('status', 'active')
       .order('created_at', { ascending: false })
     if (data) setItems(data)
   }
