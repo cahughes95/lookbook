@@ -7,7 +7,7 @@ const SPRING = { stiffness: 120, damping: 18, mass: 1.2 }
 
 const WHEEL_THRESHOLD = 80
 
-export default function Rack({ items, onItemClick }) {
+export default function Rack({ items, onItemClick, onActiveItemChange }) {
   const [activeIndex, setActiveIndex] = useState(0)
 
   // Responsive card sizing
@@ -54,6 +54,7 @@ export default function Rack({ items, onItemClick }) {
     if (clamped !== activeIndexRef.current) {
       setActiveIndex(clamped)
       activeIndexRef.current = clamped
+      onActiveItemChange?.(items[clamped])
     }
   })
 
@@ -178,7 +179,7 @@ export default function Rack({ items, onItemClick }) {
       // No h-full, no items-center — container is only as tall as its content,
       // so cards sit immediately below the header with no vertical centering gap.
       className="w-full select-none overflow-hidden"
-      style={{ cursor: 'grab', touchAction: 'none' }}
+      style={{ cursor: 'grab', touchAction: 'pan-y' }}
       onPointerDown={(e) => { onMouseDown(); onPointerDown(e) }}
       onPointerMove={onPointerMove}
       onPointerUp={(e) => { onMouseUp(); onPointerUp(e) }}

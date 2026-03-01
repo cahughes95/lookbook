@@ -4,14 +4,13 @@ import { supabase } from '../lib/supabase'
 
 // ─── Groq suggestion via Edge Function ───────────────────────────────────────
 async function getAiSuggestion(imageBase64, mediaType, signal) {
-  const { data: { session } } = await supabase.auth.getSession()
   const response = await fetch(
     `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/groq-suggest`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
       },
       body: JSON.stringify({ imageBase64, mediaType }),
       signal,
@@ -22,7 +21,7 @@ async function getAiSuggestion(imageBase64, mediaType, signal) {
 }
 
 // ─── Compress image before sending to Groq (keep under 4MB base64 limit) ────
-function compressImage(file, maxWidth = 1024) {
+function compressImage(file, maxWidth = 512) {
   return new Promise((resolve) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
@@ -33,7 +32,10 @@ function compressImage(file, maxWidth = 1024) {
       canvas.height = img.height * scale
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
       URL.revokeObjectURL(url)
-      canvas.toBlob((blob) => resolve(blob), 'image/jpeg', 0.82)
+      canvas.toBlob((blob) => {
+        console.log(`compressed image: ${(blob.size / 1024).toFixed(1)} KB`)
+        resolve(blob)
+      }, 'image/jpeg', 0.7)
     }
     img.src = url
   })
@@ -218,12 +220,14 @@ export default function AddItemModal({ onClose, onAdded }) {
 
       // Create new collection if needed
       if (showNewCollection && newCollectionName.trim()) {
+        const nextNum = collections.reduce((m, c) => Math.max(m, c.collection_number ?? 0), 0) + 1
         const { data: newCol, error: colErr } = await supabase
           .from('collections')
           .insert({
             vendor_id: user.id,
             name: newCollectionName.trim(),
             is_published: true,
+            collection_number: nextNum,
           })
           .select('id')
           .single()
@@ -439,7 +443,13 @@ export default function AddItemModal({ onClose, onAdded }) {
                       ))}
                     </select>
                     <button
-                      onClick={() => { setShowNewCollection(true); setSelectedCollectionId('') }}
+                      onClick={() => {
+                        const maxNum = collections.reduce((m, c) => Math.max(m, c.collection_number ?? 0), 0)
+                        const next = String(maxNum + 1).padStart(2, '0')
+                        setShowNewCollection(true)
+                        setSelectedCollectionId('')
+                        setNewCollectionName(`Collection ${next}`)
+                      }}
                       className="bg-white/5 border border-white/10 rounded-xl px-4 text-white/40 text-xs tracking-widest hover:bg-white/10 transition-colors"
                     >
                       + new

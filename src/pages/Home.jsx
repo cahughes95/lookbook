@@ -15,6 +15,7 @@ export default function Home() {
   const [selectedItem, setSelectedItem] = useState(null)
   const [view, setView] = useState('carousel')
   const [showScrollHint, setShowScrollHint] = useState(true)
+  const [activeItem, setActiveItem] = useState(null)
 
   useEffect(() => {
     fetchItems()
@@ -30,10 +31,13 @@ export default function Home() {
   const fetchItems = async () => {
     const { data } = await supabase
       .from('items')
-      .select('*')
+      .select('*, collections(name)')
       .eq('status', 'active')
       .order('created_at', { ascending: false })
-    if (data) setItems(data)
+    if (data) {
+      setItems(data)
+      setActiveItem(data[0] ?? null)
+    }
   }
 
   const handleItemAdded = () => {
@@ -74,8 +78,13 @@ export default function Home() {
 
       {/* The Rack */}
       {view === 'carousel' ? (
-        <div className="flex-1 flex items-start pt-6 min-h-0 relative">
-          <Rack items={items} onItemClick={setSelectedItem} />
+        <div className="shrink-0 pt-6 relative">
+          {activeItem?.collections?.name && (
+            <p className="text-center text-white/30 text-xs tracking-[0.25em] mb-3">
+              {activeItem.collections.name}
+            </p>
+          )}
+          <Rack items={items} onItemClick={setSelectedItem} onActiveItemChange={setActiveItem} />
           {showScrollHint && items.length > 0 && (
             <span className="absolute bottom-8 right-6 pointer-events-none text-white/20 text-[10px] tracking-[0.2em]">
               drag to browse

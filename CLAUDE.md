@@ -346,3 +346,4 @@ supabase gen types typescript --project-id luykttcdfnvfvlktvlhh > src/types/data
 - **Collections**: required on item creation; empty on first use — inline creation available in modal
 - **ItemDetail**: archive errors are handled and surfaced to user; exit animation uses `opacity: 0` with `duration: 0.2`; image container has fixed `minHeight: 50vh` / `maxHeight: 65vh` to prevent layout shift; `quantity_available` null-checks use `!= null` not falsy
 - **AddItemModal**: AI requests use AbortController via `aiAbortRef`; back button aborts in-flight Groq request and resets form cleanly; collection validation error is context-aware; dead state variables removed
+- **groq-suggest deploy**: after every `supabase functions deploy groq-suggest`, go to Supabase Dashboard → Edge Functions → groq-suggest → Settings and **turn off JWT Verification** — it resets to on with each deployment

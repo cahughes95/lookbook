@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import ArchiveGrid from '../components/ArchiveGrid'
+import ItemDetail from '../components/ItemDetail'
 
 export default function Archive() {
   const [items, setItems] = useState([])
+  const [selectedItem, setSelectedItem] = useState(null)
 
   useEffect(() => {
     const fetchArchived = async () => {
@@ -30,7 +33,18 @@ export default function Archive() {
         <span className="text-white/60 text-sm font-light tracking-[0.35em]">archive</span>
       </div>
 
-      <ArchiveGrid items={items} />
+      <ArchiveGrid items={items} onItemClick={setSelectedItem} />
+
+      <AnimatePresence>
+        {selectedItem && (
+          <ItemDetail
+            key="archive-item-detail"
+            item={selectedItem}
+            onClose={() => setSelectedItem(null)}
+            isArchived={true}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
