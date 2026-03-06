@@ -11,9 +11,18 @@ export default function Archive() {
 
   useEffect(() => {
     const fetchArchived = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data: vendor } = await supabase
+        .from('vendors')
+        .select('id')
+        .eq('profile_id', user.id)
+        .single()
+      if (!vendor) return
+
       const { data } = await supabase
         .from('items')
         .select('*')
+        .eq('vendor_id', vendor.id)
         .eq('status', 'archived')
         .order('archived_at', { ascending: false })
       if (data) setItems(data)
@@ -25,7 +34,7 @@ export default function Archive() {
     <div className="min-h-screen bg-[#0a0a0a]">
       <div className="flex items-center gap-4 px-6 pt-5 pb-4">
         <Link
-          to="/"
+          to="/rack"
           className="text-white/30 text-xs tracking-[0.2em] hover:text-white/60 transition-colors"
         >
           ← back

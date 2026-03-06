@@ -1,86 +1,130 @@
 # Lookbook
 
-A mobile-first flea market inventory app for vendors. Vendors photograph their items, browse them in a smooth horizontal carousel ("the rack"), and manage their inventory with product details, collections, and AI-assisted listing creation.
+A mobile-first flea market inventory app for vendors. Vendors photograph their items, browse them in a smooth horizontal carousel ("the rack"), and manage their inventory with product details, collections, and AI-assisted listing creation. Buyers can browse public vendor pages, follow vendors, save items, and DM vendors about specific items.
+
+---
+
+## Product Vision
+
+- **Vendors**: Invite-only. Must be approved to list. Real flea market vendors only — quality controlled via invite codes.
+- **Buyers**: Anyone can browse publicly. Sign up (email only, no verification) to follow vendors or save items.
+- **One account type**: Everyone has a profile. Vendors have an additional `vendors` row. A vendor can also browse and follow other vendors using the same account.
+
+---
+
+## Routes
+
+| Route | Auth | Description |
+|---|---|---|
+| `/` | Vendor only (AuthGuard) | Vendor's own rack view — browse mode, no upload |
+| `/manage` | Vendor only (AuthGuard) | Upload + manage items — work mode |
+| `/inbox` | Vendor only | Messages by item — NOT YET BUILT |
+| `/archive` | Vendor only (AuthGuard) | Vendor's archived/sold items |
+| `/login` | Public | Full page login — vendor routes only |
+| `/messages` | Buyer auth (BuyerAuthGuard) | Buyer message threads |
+| `/v/:handle` | Public | Public vendor profile + rack ✅ |
+| `/v/:handle/collection/:id` | Public | Public collection with filters — NOT YET BUILT |
 
 ---
 
 ## Core Features
 
-1. **The Rack (Home Page `/`)**
-   - Full-screen dark background
-   - Horizontal drag/scroll carousel — 3 cards visible at once (center + two partial side cards)
-   - Center card is full color, full size, and in focus
-   - Side cards are full color, slightly smaller, and partially cropped — creating a 3D depth effect
-   - As you drag, the scale transition happens fluidly in real time (not just on snap)
-   - Velocity-based momentum — a slow drag moves cards freely, a fast flick advances 2-3 cards max
-   - Cards coast to a natural stop based on momentum only — no automatic snapping or settling to center
-   - Centering is not forced — if the user stops mid-drag between two cards, it stays there
-   - Scroll/drag continues until the last item (no looping)
-   - Floating `+` button (bottom right) to add new items
-   - Tap the center card to open a detail view with a "Mark as Out of Stock" button
-   - **View toggle** (top right): switch between **Carousel** (default) and **Grid** view
-   - "Scroll or drag" hint text shown subtly at bottom right on first load
+### 1. The Rack (`/`)
+- Full-screen dark background (`#0a0a0a`)
+- Horizontal drag/scroll carousel — 3 cards visible at once (center + two partial side cards)
+- Center card: full color, full size, slight drop shadow
+- Side cards: grayscale, scaled ~85%, partially cropped — 3D depth effect
+- Drag transition: grayscale/size transitions happen in real time during drag (not just on snap)
+- Velocity-based momentum — slow drag moves one card, fast flick skips multiple
+- Cards settle smoothly on nearest card after release — glides to stop, no hard snap
+- Keyboard navigation: arrow keys
+- Pill dot indicators below carousel
+- View toggle (top right): Carousel (default) ↔ Grid
+- Floating `+` button (bottom right) → opens AddItemModal
+- Tap center card → opens ItemDetail
 
-2. **Add Item (2-step flow)**
-   - Triggered by the `+` button
-   - **Step 1**: Bottom sheet with two options: Take Photo (camera) or Upload Image
-   - **Step 2**: Product form appears after upload with:
-     - Photo preview
-     - Collection picker (select existing or create new inline)
-     - AI-prefilled name and description (shimmer while Groq analyzes)
-     - Size, price, quantity fields
-     - Per-field visibility toggles (vendor controls what buyers see)
-   - Saves to: `items`, `item_photos`, `item_visibility_settings`, `item_ai_suggestions`
+### 2. Add Item (`/manage` or `+` button)
+- 2-step flow: photo pick → product form
+- **Step 1**: Bottom sheet — Take Photo or Upload Image
+- **Step 2**: Product form with:
+  - Photo preview
+  - Collection picker (select or create inline)
+  - AI-prefilled fields (shimmer while Groq analyzes)
+  - Core fields always shown: name, description, size, price, category
+  - Optional fields shown based on `vendor_feature_flags`: tags, brand, era, condition, color, material, measurements
+  - Per-field visibility toggles (controls what buyers see)
+- Saves to: `items`, `item_photos`, `item_visibility_settings`, `item_ai_suggestions`
 
-3. **Archive Page (`/archive`)**
-   - Simple photo grid of all archived/sold items
-   - No interactions needed beyond viewing
+### 3. Archive (`/archive`)
+- Photo grid of all archived/sold items
+- Vendor-only view
+
+### 4. Public Vendor Page (`/v/:handle`) ✅ BUILT
+- No auth required — fully public
+- Shows vendor's active rack (reuses Rack + RackGrid components)
+- Vendor bio, instagram, markets
+- Follow button — triggers AuthModal if anonymous, completes follow on success
+- Category pill filters — horizontally scrollable on mobile
+- Tapping item → opens BuyerItemDetail
+
+### 5. Public Collection Page (`/v/:handle/collection/:id`)
+- No auth required
+- Category pill filters at top
+- Items grouped by category
+- Search bar (text search across name + description + tags)
+- Item cards → buyer item detail view
+- **NOT YET BUILT**
+
+### 6. Buyer Item Detail ✅ BUILT
+- Separate from vendor-side ItemDetail.jsx
+- Respects `item_visibility_settings` — only shows fields vendor has enabled
+- Save button — triggers AuthModal if anonymous, saves on success
+- DM button — triggers AuthModal if anonymous, sends message on success
+- Inline message thread shown if buyer has already messaged about this item
+- Interest counter: saves_count · dms_count shown subtly
+- ⚠️ Desktop item click not opening BuyerItemDetail — fix in progress
+
+### 7. Buyer Messages (`/messages`) ✅ BUILT
+- Facebook Marketplace-style thread list
+- Threads grouped by item — shows item photo, vendor name, last message, timestamp
+- Tapping thread expands inline with full message history + follow-up input
+- Requires auth — BuyerAuthGuard shows AuthModal if not logged in
+
+### 8. AuthModal ✅ BUILT
+- Reusable popup component — NOT a full page redirect
+- Bottom sheet on mobile, centered card on desktop
+- Slides up from bottom on mobile, accounts for keyboard height via visualViewport API
+- Toggle between sign in / sign up
+- `onSuccess(user)` callback fires after auth — parent completes the original action
+- Used for: save item, follow vendor, DM vendor, access /messages
+- Vendor routes (/, /manage, /archive) still use AuthGuard → /login full page redirect
+
+### 9. Messaging
+- DMs scoped per item — not a general inbox
+- Vendor inbox at `/inbox` — **NOT YET BUILT** (placeholder route only)
+- `dms_count` on item increments on first message per unique sender via trigger
 
 ---
 
-## Design
+## Design System
 
-- **Dark background** (`#141414` or `#0a0a0a`)
-- **Minimal UI** — photos are the focus, controls stay out of the way
-- Font: clean sans-serif, minimal text on screen at any time
-- Mobile-first but must work on desktop too
-- All text uses `tracking-[0.15em]` or wider — spaced lettering throughout
-- Subtle `white/5`, `white/10`, `white/30` layering for UI elements
-- Inputs: `bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70`
-- Buttons (primary): `bg-white/90 text-[#141414]`
-- Buttons (secondary): `bg-white/5 border border-white/10 text-white/80`
+- **Background**: `#0a0a0a` or `#141414`
+- **Minimal UI** — photos are the focus
+- **Typography**: clean sans-serif, `tracking-[0.15em]` or wider throughout
+- **UI layering**: `white/5`, `white/10`, `white/30` for surfaces and borders
+- **Inputs**: `bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70`
+- **Primary button**: `bg-white/90 text-[#141414]`
+- **Secondary button**: `bg-white/5 border border-white/10 text-white/80`
+- Mobile-first, works on desktop at same interaction model, different scale
 
-### Carousel Visual Behavior
-- 3 cards visible at once — center fully in view, side cards partially cropped
-- Center card: full color, full size, slight drop shadow
-- Side cards: scaled ~85%, partially hidden behind center
-- Drag transition: cards scale in real time based on distance from center
-- Momentum scrolling: velocity determines travel — flicks advance 2-3 cards max
-- No hard snap — settle feels physical and weighted
-- Card proportions: portrait orientation (~3:4 ratio)
-
-### Desktop Layout
-- Center card height ~70-75vh
-- Side cards peek in generously
-
-### Mobile Layout
-- Images immediately below header — minimal gap, no vertical centering
-- Do NOT use `height: 100vh` with `items-center` or `justify-center` on carousel wrapper
-- Center card ~75% of screen width, side cards peek ~10-15%
-
-### Mobile Touch & Scroll Behavior
-- Direct 1:1 finger tracking — zero delay
-- Do NOT use CSS `overflow-x: scroll`
-- Use pointer/touch events with Framer Motion's `drag` prop
-- No snapping while dragging
-- Progressive deceleration after release — low friction, high inertia
-- Flick velocity multiplier tuned low — 2-3 cards max per flick
-
-### Grid View
-- Toggled from carousel via view switcher (top right)
-- Carousel is default on every page load
-- 2 columns mobile, 3-4 desktop
-- Tapping opens same item detail view
+### Carousel Specifics
+- Card proportions: portrait ~3:4 ratio
+- Desktop: center card ~70-75vh height
+- Mobile: center card ~75% screen width, side cards peek ~10-15%
+- Do NOT use CSS `overflow-x: scroll` — use pointer/touch events with Framer Motion
+- No centering with `items-center` / `justify-center` on carousel wrapper
+- Framer Motion spring: `stiffness: 120, damping: 18, mass: 1.2`
+- Mobile deceleration: `ease: [0.15, 0, 0, 1], duration` scales with velocity
 
 ---
 
@@ -89,7 +133,7 @@ A mobile-first flea market inventory app for vendors. Vendors photograph their i
 | Layer | Choice |
 |---|---|
 | Frontend | React + Vite |
-| Styling | Tailwind CSS v4 |
+| Styling | Tailwind CSS v4 (`@tailwindcss/vite` plugin, NOT PostCSS) |
 | Animations | Framer Motion |
 | Backend + Auth + DB | Supabase |
 | Image Storage | Supabase Storage (`item-images` bucket, public) |
@@ -104,13 +148,14 @@ A mobile-first flea market inventory app for vendors. Vendors photograph their i
 ```
 lookbook/
 ├── supabase/
-│   └── functions/
-│       └── groq-suggest/
-│           └── index.ts        ← Groq vision proxy Edge Function
+│   ├── functions/
+│   │   └── groq-suggest/
+│   │       └── index.ts          ← Groq vision proxy
+│   └── schema.sql                ← Full v2 schema
 ├── src/
 │   ├── components/
 │   │   ├── AddItemButton.jsx
-│   │   ├── AddItemModal.jsx    ← 2-step upload + AI form
+│   │   ├── AddItemModal.jsx      ← 2-step upload + AI form (v2)
 │   │   ├── ArchiveGrid.jsx
 │   │   ├── AuthGuard.jsx
 │   │   ├── ItemCard.jsx
@@ -120,122 +165,187 @@ lookbook/
 │   │   └── ViewToggle.jsx
 │   ├── pages/
 │   │   ├── Archive.jsx
-│   │   ├── Home.jsx
-│   │   └── Login.jsx
+│   │   ├── Home.jsx             ← vendor rack view, no + button
+│   │   ├── Login.jsx            ← vendor-side full page auth only
+│   │   ├── Manage.jsx           ← vendor upload + item management
+│   │   ├── VendorPage.jsx       ← public vendor page /v/:handle
+│   │   └── Messages.jsx         ← buyer message threads /messages
+│   ├── components/
+│   │   ├── AuthModal.jsx        ← buyer-facing auth popup
+│   │   ├── BuyerAuthGuard.jsx   ← wraps /messages, shows AuthModal if unauthed
+│   │   ├── BuyerItemDetail.jsx  ← buyer item detail with save/DM
 │   ├── lib/
-│   │   └── supabase.js         ← createClient, uses VITE_ env vars
+│   │   └── supabase.js
 │   ├── types/
-│   │   ├── database.ts         ← generated, DO NOT edit manually
-│   │   └── index.ts            ← helper types (Item, Collection, etc.)
+│   │   ├── database.ts           ← DO NOT edit manually
+│   │   └── index.ts
 │   ├── App.jsx
-│   ├── App.css
-│   ├── main.jsx
 │   └── index.css
 ```
 
 ---
 
-## Database Schema (Supabase / PostgreSQL)
+## Database Schema (v2 — live in Supabase)
 
-### `items`
+### Key relationship chain:
+```
+auth.users
+  └── profiles (1:1, auto-created on signup via trigger)
+        └── vendors (1:1, only for approved vendors)
+              ├── vendor_feature_flags (1:1, auto-created on vendor insert)
+              ├── collections
+              │     └── items
+              │           ├── item_photos
+              │           ├── item_visibility_settings
+              │           └── item_ai_suggestions
+              └── invite_codes
+profiles
+  ├── follows (buyer follows vendor)
+  ├── saves (buyer saves item)
+  └── messages (buyer DMs vendor about item)
+```
+
+### `profiles`
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid | PK, FK → auth.users |
+| handle | text | unique, `^[a-z0-9_]{3,30}$` |
+| display_name | text | |
+| avatar_url | text | |
+| created_at / updated_at | timestamptz | |
+
+### `vendors`
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid | PK |
-| vendor_id | uuid | FK → auth.users |
-| collection_id | uuid | FK → collections (nullable) |
-| image_url | text | Legacy primary image URL (keep, don't remove) |
-| name | text | Nullable |
-| description | text | Nullable |
-| size | text | Nullable |
-| price | numeric(10,2) | Nullable |
-| quantity_available | integer | Default 1 |
-| status | text | `'active'` \| `'sold'` \| `'archived'` |
-| created_at | timestamptz | Auto |
-| updated_at | timestamptz | Auto (trigger) |
-| archived_at | timestamptz | Nullable |
+| profile_id | uuid | unique FK → profiles |
+| bio | text | |
+| location | text | |
+| instagram_handle | text | without @ |
+| website_url | text | |
+| is_approved | boolean | default false — flip to true to approve |
+| invited_by | uuid | FK → vendors (nullable) |
+| invite_code | text | unique, auto-generated 8-char code |
+| invites_remaining | int | default 3 |
+| booth_name | text | |
+| markets | text[] | e.g. ['Rose Bowl', 'Melrose'] |
+
+### `vendor_feature_flags`
+| Column | Type | Default | Notes |
+|---|---|---|---|
+| vendor_id | uuid | PK FK → vendors | |
+| show_condition_field | boolean | false | Shows condition in upload form |
+| show_brand_field | boolean | false | |
+| show_era_field | boolean | false | |
+| show_measurements_field | boolean | false | |
+| show_color_field | boolean | false | |
+| show_material_field | boolean | false | |
+| show_tags_field | boolean | false | Shows editable tags in upload form |
+| enable_saves | boolean | true | |
+| enable_dms | boolean | true | |
+| enable_search | boolean | true | |
+
+**To enable a field for a vendor** (run in Supabase SQL Editor):
+```sql
+UPDATE public.vendor_feature_flags
+SET show_tags_field = true
+WHERE vendor_id = (SELECT id FROM vendors WHERE profile_id = '<profile_id>');
+```
 
 ### `collections`
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid | PK |
-| vendor_id | uuid | FK → auth.users |
-| name | text | Required |
-| description | text | Nullable |
-| is_featured | boolean | Default false |
-| is_published | boolean | Default false |
-| collection_number | integer | Nullable (e.g. "Drop #12") |
-| published_at | timestamptz | Nullable |
-| created_at / updated_at | timestamptz | Auto |
+| vendor_id | uuid | FK → vendors.id (NOT auth.users) |
+| name | text | |
+| description | text | |
+| collection_number | int | drop number |
+| is_published | boolean | default false |
+| cover_image_url | text | |
+
+### `items`
+| Column | Type | Notes |
+|---|---|---|
+| id | uuid | PK |
+| collection_id | uuid | FK → collections |
+| vendor_id | uuid | FK → vendors.id (NOT auth.users) |
+| image_url | text | primary display image |
+| name | text | |
+| description | text | |
+| status | item_status | `active` \| `sold` \| `archived` |
+| category | item_category | AI-picked from fixed enum |
+| category_reviewed | boolean | true after AI has analyzed |
+| category_model | text | e.g. `llama-4-scout-17b-16e-instruct` |
+| tags | text[] | AI-generated freeform search tags |
+| condition | item_condition | AI-picked: `new` \| `excellent` \| `good` \| `fair` |
+| brand | text | |
+| era | text | e.g. `1970s`, `Y2K` |
+| color | text | |
+| material | text | |
+| size | text | |
+| measurements | text | |
+| price | numeric(10,2) | |
+| is_price_firm | boolean | |
+| quantity_available | int | default 1 |
+| saves_count | int | denormalized, auto-updated via trigger |
+| dms_count | int | denormalized, auto-updated via trigger |
+| embedding | vector(1536) | dormant — for future semantic search |
+
+### `item_category` enum (fixed — AI picks from this list)
+`tops`, `bottoms`, `outerwear`, `dresses`, `shoes`, `bags`, `jewelry`, `accessories`, `home`, `art`, `vintage`, `other`
 
 ### `item_photos`
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid | PK |
 | item_id | uuid | FK → items |
-| storage_path | text | Path in `item-images` bucket |
-| is_primary | boolean | Only one true per item (unique partial index) |
-| sort_order | integer | Default 0 |
-| ai_analyzed | boolean | Whether Groq has analyzed this photo |
-| created_at | timestamptz | Auto |
+| storage_path | text | path in `item-images` bucket |
+| is_primary | boolean | |
+| sort_order | int | |
+| ai_analyzed | boolean | |
 
 ### `item_visibility_settings`
-| Column | Type | Notes |
-|---|---|---|
-| id | uuid | PK |
-| item_id | uuid | FK → items (unique) |
-| show_name | boolean | Default true |
-| show_description | boolean | Default true |
-| show_size | boolean | Default true |
-| show_price | boolean | Default true |
-| show_quantity | boolean | Default false |
+Controls which fields buyers can see. All boolean, vendor sets on upload.
+`show_name`, `show_description`, `show_size`, `show_price`, `show_quantity`,
+`show_condition`, `show_brand`, `show_era`, `show_measurements`, `show_color`, `show_material`, `show_tags`
 
-### `item_saves`
+### `saves`
 | Column | Type | Notes |
 |---|---|---|
-| id | uuid | PK |
+| profile_id | uuid | FK → profiles |
 | item_id | uuid | FK → items |
-| user_id | uuid | FK → auth.users |
-| saved_at | timestamptz | Auto |
+| unique | (profile_id, item_id) | |
 
-### `item_views`
+Trigger auto-increments `items.saves_count` on insert/delete.
+
+### `messages`
 | Column | Type | Notes |
 |---|---|---|
-| id | uuid | PK |
-| item_id | uuid | FK → items |
-| user_id | uuid | Nullable (anonymous allowed) |
-| session_id | text | For deduplication |
-| viewed_at | timestamptz | Auto |
+| item_id | uuid | FK → items — DMs scoped per item |
+| sender_id | uuid | FK → profiles |
+| vendor_id | uuid | FK → vendors |
+| body | text | |
+| is_read | boolean | default false |
 
-### `item_comments`
+Trigger auto-increments `items.dms_count` on first message per sender per item.
+
+### `follows`
 | Column | Type | Notes |
 |---|---|---|
-| id | uuid | PK |
-| item_id | uuid | FK → items |
-| user_id | uuid | FK → auth.users |
-| body | text | Required |
-| vendor_reaction | text | Emoji reaction from vendor |
-| created_at | timestamptz | Auto |
+| follower_id | uuid | FK → profiles |
+| vendor_id | uuid | FK → vendors |
+| unique | (follower_id, vendor_id) | |
 
-### `item_ai_suggestions`
+### `invite_codes`
 | Column | Type | Notes |
 |---|---|---|
-| id | uuid | PK |
-| item_id | uuid | FK → items |
-| photo_id | uuid | FK → item_photos |
-| suggested_name | text | What Groq suggested |
-| suggested_description | text | What Groq suggested |
-| suggested_size | text | What Groq suggested |
-| accepted_name | boolean | Did vendor keep the suggestion? |
-| accepted_description | boolean | Did vendor keep the suggestion? |
-| created_at | timestamptz | Auto |
+| code | text | unique 8-char |
+| created_by | uuid | FK → vendors |
+| used_by | uuid | FK → profiles (nullable) |
+| used_at | timestamptz | |
 
----
-
-## Storage
-
-- **Bucket**: `item-images` (public)
-- **Path pattern**: `{user_id}/{timestamp}-{random}.{ext}`
-- **Policies**: public read, authenticated upload/delete/update scoped to own folder
+### `search_logs`
+Logs all searches with result count. Zero-result searches indexed separately — use to identify missing tags.
 
 ---
 
@@ -243,61 +353,77 @@ lookbook/
 
 ### `groq-suggest`
 - **Location**: `supabase/functions/groq-suggest/index.ts`
-- **Purpose**: Proxies image + prompt to Groq API, returns `{ name, description, suggested_size }`
 - **Model**: `meta-llama/llama-4-scout-17b-16e-instruct`
-- **Secret**: `GROQ_API_KEY` set via `supabase secrets set`
-- **Called from**: `AddItemModal.jsx` after photo upload, using user's JWT for auth
+- **Input**: `{ imageBase64, mediaType }`
+- **Returns**: `{ name, description, suggested_size, category, tags, brand, era, color, condition }`
+- **Secret**: `GROQ_API_KEY` via Supabase secrets
 - **Deploy**: `supabase functions deploy groq-suggest --project-ref luykttcdfnvfvlktvlhh`
+- ⚠️ **After every deploy**: Go to Supabase Dashboard → Edge Functions → groq-suggest → Settings → **turn off JWT Verification** (it resets to on with each deploy)
 
 ---
 
-## TypeScript Types
+## AI Category Taxonomy
 
-```typescript
-// src/types/index.ts — import these throughout the app
-import type { Tables, TablesInsert, TablesUpdate } from './database'
+Fixed enum — AI always picks from this list. Do not use freeform categories.
+Adding new categories requires: (1) alter the enum, (2) run a backfill Edge Function against items where `category = 'other'` or `category_reviewed = false`.
 
-export type Item = Tables<'items'>
-export type Collection = Tables<'collections'>
-export type ItemPhoto = Tables<'item_photos'>
-export type ItemVisibilitySettings = Tables<'item_visibility_settings'>
-export type ItemSave = Tables<'item_saves'>
-export type ItemView = Tables<'item_views'>
-export type ItemComment = Tables<'item_comments'>
-export type ItemAiSuggestion = Tables<'item_ai_suggestions'>
-export type NewItem = TablesInsert<'items'>
-export type NewCollection = TablesInsert<'collections'>
-export type NewItemPhoto = TablesInsert<'item_photos'>
-export type AiSuggestion = {
-  name: string
-  description: string
-  suggested_size: string | null
-}
-```
-
-Regenerate types after any schema change:
-```bash
-supabase gen types typescript --project-id luykttcdfnvfvlktvlhh > src/types/database.ts
-```
+Tags are freeform (`text[]`) — AI generates 8-15 per item covering:
+silhouette/cut, material, era, color, style, distinctive details.
+Used for search. Vendor can edit if `show_tags_field` flag is enabled.
 
 ---
 
-## Environment Variables
+## Vendor Lookup Pattern
 
-```
-VITE_SUPABASE_URL=
-VITE_SUPABASE_ANON_KEY=
+**Critical**: All vendor-owned data now references `vendors.id`, NOT `auth.users.id`.
+Always look up vendor id from the vendors table first:
+
+```javascript
+// Get vendor id from profile
+const { data: { user } } = await supabase.auth.getUser()
+const { data: vendor } = await supabase
+  .from('vendors')
+  .select('id')
+  .eq('profile_id', user.id)
+  .single()
+const vendorId = vendor.id
+
+// Then use vendorId for all queries
+const { data: items } = await supabase
+  .from('items')
+  .select('*')
+  .eq('vendor_id', vendorId)
 ```
 
-Never hardcode these. Edge Function secrets are managed via Supabase dashboard or CLI.
+Never use `auth.uid()` or `user.id` directly as a vendor_id.
+
+---
+
+## RLS Summary
+
+- `profiles`: public read, own update
+- `vendors`: public read (approved only), own update
+- `collections`: public read (published only), vendor CRUD own
+- `items`: public read (active in published collections), vendor CRUD own
+- `saves`, `follows`, `messages`: scoped to sender/follower, vendor reads their own messages
+- `vendor_feature_flags`: vendor read own, service role update only (you flip manually)
+- `invite_codes`: public read unused codes, vendor insert own
+
+---
+
+## Storage
+
+- **Bucket**: `item-images` (public)
+- **Path pattern**: `{user_id}/{timestamp}-{random}.{ext}`
+- **Policies**: public read, authenticated upload/delete scoped to own folder
 
 ---
 
 ## Common Commands
 
 ```bash
-npm run dev                          # local dev server
-npm run dev -- --host                # expose on local network for mobile testing
+npm run dev                            # local dev server
+npm run dev -- --host                  # expose on network for mobile testing
 supabase functions deploy groq-suggest --project-ref luykttcdfnvfvlktvlhh
 supabase secrets set GROQ_API_KEY=... --project-ref luykttcdfnvfvlktvlhh
 supabase gen types typescript --project-id luykttcdfnvfvlktvlhh > src/types/database.ts
@@ -307,43 +433,36 @@ supabase gen types typescript --project-id luykttcdfnvfvlktvlhh > src/types/data
 
 ## App Behavior Rules
 
-- Only `active` items appear on the rack and grid view (previously `in_stock` — migrated)
+- Only `active` items appear on the rack and grid views
 - Only `archived` items appear on the archive page
-- Vendors only see their own items — RLS enforced at DB level
-- `image_url` on `items` is legacy — new items also write to `item_photos` (keep both for now)
-- Visibility toggles on `item_visibility_settings` control what buyers see — enforced at app layer, not DB
+- Vendors only see their own items on vendor-side routes — RLS enforced at DB level
+- Public pages (`/v/:handle`, `/v/:handle/collection/:id`) are accessible without auth
+- `image_url` on `items` is the primary display image — always populated
+- Visibility toggles on `item_visibility_settings` control what buyers see — enforced at app layer
 - AI suggestions are non-blocking — form is usable immediately, fields populate when Groq responds
-- Collection is required when creating an item — vendor must select or create one
-
----
-
-## Conventions
-
-- Use Supabase client directly from frontend — no Express backend
-- RLS handles all data access scoping
-- Components in `src/components/`, pages in `src/pages/`
-- Supabase client initialized once in `src/lib/supabase.js`
-- Keep components under ~150 lines — split if larger
-- No `Co-Authored-By` lines in commit messages
-- Tailwind v4 — uses `@tailwindcss/vite` plugin in `vite.config.js`, NOT PostCSS config
+- Collection is required when creating an item
+- Category is always shown in upload form (drives collection filter UI)
+- Optional fields (tags, brand, era, etc.) are hidden unless vendor's feature flag is enabled
+- AI always populates ALL fields in the background regardless of feature flags — data is there when flags are enabled later
 
 ---
 
 ## Session Notes
 
-- **Email confirmation**: disabled in Supabase — sign up logs in immediately
-- **Git repo**: `https://github.com/cahughes95/lookbook`, initialized inside `lookbook/`
-- **Mobile testing**: `npm run dev -- --host`, access via Network URL on phone
-- **Tailwind v4**: `@tailwindcss/vite` plugin only — no PostCSS
-- **Carousel flick velocity**: tuned low — 2-3 cards max per flick
-- **Mobile snap**: NO snap-to-center — cards coast to free stop, no post-release centering
-- **Mobile deceleration**: gradual and progressive — low friction, high inertia
-- **Status migration**: `in_stock` → `active` (ran in v2 migration, check constraint updated)
 - **Supabase project ref**: `luykttcdfnvfvlktvlhh`
-- **AddItemModal**: now a 2-step flow — photo pick → product form with AI suggestions
-- **Groq model**: `meta-llama/llama-4-scout-17b-16e-instruct` via `groq-suggest` Edge Function
-- **item_photos**: new table for multi-photo support; `image_url` on items kept for legacy compatibility
-- **Collections**: required on item creation; empty on first use — inline creation available in modal
-- **ItemDetail**: archive errors are handled and surfaced to user; exit animation uses `opacity: 0` with `duration: 0.2`; image container has fixed `minHeight: 50vh` / `maxHeight: 65vh` to prevent layout shift; `quantity_available` null-checks use `!= null` not falsy
-- **AddItemModal**: AI requests use AbortController via `aiAbortRef`; back button aborts in-flight Groq request and resets form cleanly; collection validation error is context-aware; dead state variables removed
-- **groq-suggest deploy**: after every `supabase functions deploy groq-suggest`, go to Supabase Dashboard → Edge Functions → groq-suggest → Settings and **turn off JWT Verification** — it resets to on with each deployment
+- **Git repo**: `https://github.com/cahughes95/lookbook`
+- **Email confirmation**: disabled in Supabase — signup logs in immediately
+- **Tailwind v4**: `@tailwindcss/vite` plugin only — no `tailwind.config.js`, no PostCSS
+- **Mobile testing**: `npm run dev -- --host`, access via Network URL on phone
+- **Vendor seeded**: vendor row exists in DB, `is_approved = true`
+- **Schema v2**: wiped and rerun clean — all tables reference `vendors.id` not `auth.users.id`
+- **quantity_available**: manually added back via `ALTER TABLE` after schema wipe
+- **groq-suggest JWT**: must be turned OFF after every deploy in Supabase dashboard
+- **Groq model**: `meta-llama/llama-4-scout-17b-16e-instruct`
+- **Tags**: saved to DB silently — not shown in upload form unless `show_tags_field = true`
+- **Category**: always shown in upload form, AI picks from fixed 12-item enum
+- **Backfill pattern**: to re-categorize items, query by `category_reviewed = false` or `category = 'other'`, send `image_url` back through Groq, update item
+- **AuthModal**: uses visualViewport API to stay above keyboard on mobile
+- **Buyer auth pattern**: AuthModal popup for buyer actions (save/follow/DM), NOT full page redirect. Full page redirect only for vendor routes via AuthGuard
+- **BuyerItemDetail desktop bug**: tapping item on VendorPage does nothing on desktop — no console errors, click handler not wiring through correctly. Needs fix.
+- **Not yet built**: /inbox (vendor), /v/:handle/collection/:id, buyer profile page, saved items page, invite-only vendor signup flow

@@ -1,21 +1,20 @@
 import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import Rack from '../components/Rack'
 import RackGrid from '../components/RackGrid'
 import ViewToggle from '../components/ViewToggle'
-import AddItemButton from '../components/AddItemButton'
-import AddItemModal from '../components/AddItemModal'
 import ItemDetail from '../components/ItemDetail'
 
 export default function Home() {
+  const navigate = useNavigate()
   const [items, setItems] = useState([])
-  const [showAddModal, setShowAddModal] = useState(false)
   const [selectedItem, setSelectedItem] = useState(null)
   const [view, setView] = useState('carousel')
   const [showScrollHint, setShowScrollHint] = useState(true)
   const [activeItem, setActiveItem] = useState(null)
+  const [userInitial, setUserInitial] = useState('?')
 
   useEffect(() => {
     fetchItems()
@@ -29,9 +28,21 @@ export default function Home() {
   }, [showScrollHint])
 
   const fetchItems = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
+    const [{ data: vendor }, { data: prof }] = await Promise.all([
+      supabase.from('vendors').select('id').eq('profile_id', user.id).single(),
+      supabase.from('profiles').select('display_name').eq('id', user.id).single(),
+    ])
+
+    setUserInitial((prof?.display_name?.[0] || user.email?.[0] || '?').toUpperCase())
+    if (!vendor) return
+
     const { data } = await supabase
       .from('items')
       .select('*, collections(name)')
+      .eq('vendor_id', vendor.id)
       .eq('status', 'active')
       .order('created_at', { ascending: false })
     if (data) {
@@ -40,18 +51,9 @@ export default function Home() {
     }
   }
 
-  const handleItemAdded = () => {
-    setShowAddModal(false)
-    fetchItems()
-  }
-
   const handleArchived = () => {
     setSelectedItem(null)
     fetchItems()
-  }
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
   }
 
   return (
@@ -61,6 +63,12 @@ export default function Home() {
         <h1 className="text-white/60 text-sm font-light tracking-[0.35em]">lookbook</h1>
         <div className="flex items-center gap-4">
           <Link
+            to="/manage"
+            className="text-white/30 text-xs tracking-[0.2em] hover:text-white/60 transition-colors"
+          >
+            manage
+          </Link>
+          <Link
             to="/archive"
             className="text-white/30 text-xs tracking-[0.2em] hover:text-white/60 transition-colors"
           >
@@ -68,10 +76,10 @@ export default function Home() {
           </Link>
           <ViewToggle view={view} onChange={setView} />
           <button
-            onClick={handleSignOut}
-            className="text-white/20 text-xs tracking-[0.2em] hover:text-white/50 transition-colors"
+            onClick={() => navigate('/vendor-settings')}
+            className="w-8 h-8 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-white/40 text-xs tracking-wider"
           >
-            out
+            {userInitial}
           </button>
         </div>
       </div>
@@ -96,20 +104,6 @@ export default function Home() {
           <RackGrid items={items} onItemClick={setSelectedItem} />
         </div>
       )}
-
-      {/* Floating add button */}
-      <AddItemButton onClick={() => setShowAddModal(true)} />
-
-      {/* Modals */}
-      <AnimatePresence>
-        {showAddModal && (
-          <AddItemModal
-            key="add-modal"
-            onClose={() => setShowAddModal(false)}
-            onAdded={handleItemAdded}
-          />
-        )}
-      </AnimatePresence>
 
       <AnimatePresence>
         {selectedItem && (

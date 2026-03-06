@@ -40,6 +40,7 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
 
   const activeIndexRef = useRef(0)
   const isDraggingRef = useRef(false)
+  const didDrag = useRef(false)
   const dragStartX = useRef(0)
   const dragStartOffset = useRef(0)
   const wheelAccum = useRef(0)
@@ -74,6 +75,7 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
   const onPointerDown = useCallback((e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
     isDraggingRef.current = true
+    didDrag.current = false
     dragStartX.current = e.clientX
     dragStartOffset.current = displayOffset.get()
     containerRef.current?.setPointerCapture(e.pointerId)
@@ -81,6 +83,7 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
 
   const onPointerMove = useCallback((e) => {
     if (!isDraggingRef.current) return
+    if (Math.abs(e.clientX - dragStartX.current) > 4) didDrag.current = true
     // 1:1 — no spring, no delay
     displayOffset.set(dragStartOffset.current + (e.clientX - dragStartX.current))
   }, [displayOffset])
@@ -90,6 +93,27 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
     isDraggingRef.current = false
 
     const stride = strideRef.current
+
+    // Clean tap (no drag) — handle at pointer level for reliability.
+    // setPointerCapture redirects pointer events to the container, which means
+    // browser click synthesis may fire on the container (no onClick) instead of
+    // the ItemCard. Detecting taps here avoids that ambiguity entirely.
+    if (!didDrag.current) {
+      const el = containerRef.current
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        const trackOriginX = rect.left + rect.width / 2
+        const rawIndex = (dragStartX.current - trackOriginX - displayOffset.get()) / stride
+        const tappedIdx = Math.max(0, Math.min(count - 1, Math.round(rawIndex)))
+        if (tappedIdx === activeIndexRef.current) {
+          onItemClick(items[tappedIdx])
+        } else {
+          snapToIndex(tappedIdx)
+        }
+      }
+      return
+    }
+
     const velocity = displayOffset.getVelocity() // px/s
 
     if (e.pointerType === 'touch') {
@@ -107,12 +131,12 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
         duration,
       })
     } else {
-      // Desktop: snap to nearest card with spring physics (unchanged)
+      // Desktop: snap to nearest card with spring physics
       const fractionalIndex = -displayOffset.get() / stride
       const velocityBias = Math.max(-2, Math.min(2, -(velocity * 0.04) / stride))
       snapToIndex(Math.round(fractionalIndex + velocityBias), velocity * 0.15)
     }
-  }, [count, displayOffset, snapToIndex])
+  }, [count, displayOffset, items, onItemClick, snapToIndex])
 
   const onPointerCancel = useCallback(() => {
     if (!isDraggingRef.current) return
@@ -147,17 +171,6 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [snapToIndex])
-
-  // --- Tap vs drag discrimination ---
-  const onCardClick = useCallback((item, index) => {
-    const travelled = Math.abs(displayOffset.get() - dragStartOffset.current)
-    if (travelled > 8) return
-    if (index === activeIndex) {
-      onItemClick(item)
-    } else {
-      snapToIndex(index)
-    }
-  }, [activeIndex, displayOffset, onItemClick, snapToIndex])
 
   const onMouseDown = () => { if (containerRef.current) containerRef.current.style.cursor = 'grabbing' }
   const onMouseUp = () => { if (containerRef.current) containerRef.current.style.cursor = 'grab' }
@@ -201,8 +214,7 @@ export default function Rack({ items, onItemClick, onActiveItemChange }) {
               cardW={cardSize.w}
               cardH={cardSize.h}
               stride={cardSize.stride}
-              onClick={() => onCardClick(item, index)}
-            />
+              />
           ))}
         </motion.div>
       </div>
