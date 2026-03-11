@@ -54,11 +54,12 @@ export default function VendorPage() {
         .single()
       if (!vend || !vend.is_approved) { setNotFound(true); setLoading(false); return }
 
-      const [{ data: cols }, { count: itemCount }, { count: fCount }] = await Promise.all([
+      const [{ data: cols }, { count: itemCount }, { count: fCount, error: fErr }] = await Promise.all([
         supabase.from('collections').select('id, name, collection_number').eq('vendor_id', vend.id).eq('is_published', true).order('created_at', { ascending: false }),
-        supabase.from('items').select('id', { count: 'exact', head: true }).eq('vendor_id', vend.id).eq('status', 'active'),
-        supabase.from('follows').select('id', { count: 'exact', head: true }).eq('vendor_id', vend.id),
+        supabase.from('items').select('*', { count: 'exact', head: true }).eq('vendor_id', vend.id).eq('status', 'active'),
+        supabase.from('follows').select('*', { count: 'exact', head: true }).eq('vendor_id', vend.id),
       ])
+      if (fErr) console.error('Follower count error:', fErr)
 
       const owner = !!(authUser && authUser.id === prof.id)
       setIsOwner(owner)

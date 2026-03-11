@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import AuthModal from './AuthModal'
@@ -8,13 +8,7 @@ export default function BuyerItemDetail({ item, onClose }) {
   const [visibility, setVisibility] = useState(null)
   const [isSaved, setIsSaved] = useState(false)
   const [saveLoading, setSaveLoading] = useState(false)
-  const [thread, setThread] = useState([])
-  const [messageBody, setMessageBody] = useState('')
-  const [showDmInput, setShowDmInput] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [messageSent, setMessageSent] = useState(false)
   const [authModal, setAuthModal] = useState(null)
-  const inputRef = useRef(null)
 
   // Initialise user + subscribe to auth changes
   useEffect(() => {
@@ -43,15 +37,9 @@ export default function BuyerItemDetail({ item, onClose }) {
   }, [item.id])
 
   const loadUserData = async (user) => {
-    const [{ data: saved }, { data: msgs }] = await Promise.all([
-      supabase.from('saves').select('item_id')
-        .eq('profile_id', user.id).eq('item_id', item.id).maybeSingle(),
-      supabase.from('messages').select('id, body, created_at')
-        .eq('item_id', item.id).eq('sender_id', user.id)
-        .order('created_at', { ascending: true }),
-    ])
+    const { data: saved } = await supabase.from('saves').select('item_id')
+      .eq('profile_id', user.id).eq('item_id', item.id).maybeSingle()
     setIsSaved(!!saved)
-    setThread(msgs ?? [])
   }
 
   // ── Save toggle ──────────────────────────────────────────────────────────────
@@ -83,52 +71,11 @@ export default function BuyerItemDetail({ item, onClose }) {
     setSaveLoading(false)
   }
 
-  // ── DM ───────────────────────────────────────────────────────────────────────
-  const handleDmClick = () => {
-    if (!currentUser) {
-      setAuthModal({
-        hint: 'sign in to message the vendor',
-        onSuccess: async (user) => {
-          setCurrentUser(user)
-          setAuthModal(null)
-          await loadUserData(user)
-          setShowDmInput(true)
-          setTimeout(() => inputRef.current?.focus(), 100)
-        },
-      })
-      return
-    }
-    setShowDmInput(true)
-    setTimeout(() => inputRef.current?.focus(), 100)
-  }
-
-  const sendMessage = async () => {
-    if (!messageBody.trim() || !currentUser) return
-    setSending(true)
-    const { data: msg } = await supabase.from('messages').insert({
-      item_id: item.id,
-      sender_id: currentUser.id,
-      vendor_id: item.vendor_id,
-      body: messageBody.trim(),
-    }).select('id, body, created_at').single()
-
-    if (msg) {
-      setThread(t => [...t, msg])
-      setMessageBody('')
-      setShowDmInput(false)
-      setMessageSent(true)
-    }
-    setSending(false)
-  }
-
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const vis = visibility
   const show = (key, value) => vis?.[key] && value
 
-  const socialProof = [
-    item.saves_count > 0 && `${item.saves_count} saved`,
-    item.dms_count > 0 && `${item.dms_count} interested`,
-  ].filter(Boolean).join(' · ')
+  const socialProof = item.saves_count > 0 ? `${item.saves_count} saved` : ''
 
   return (
     <motion.div
@@ -215,74 +162,17 @@ export default function BuyerItemDetail({ item, onClose }) {
 
       {/* Actions */}
       <div className="flex-shrink-0 px-6 pb-4 space-y-2 mt-auto">
-        {/* Existing thread */}
-        {thread.length > 0 && (
-          <div className="bg-white/3 rounded-xl px-4 py-3 space-y-2 mb-3">
-            <p className="text-white/20 text-[10px] tracking-[0.2em] mb-2">your messages</p>
-            {thread.map(msg => (
-              <p key={msg.id} className="text-white/50 text-xs tracking-wide leading-relaxed">
-                {msg.body}
-              </p>
-            ))}
-          </div>
-        )}
-
-        {/* DM input */}
-        {showDmInput && (
-          <div className="space-y-2 mb-2">
-            <textarea
-              ref={inputRef}
-              value={messageBody}
-              onChange={e => setMessageBody(e.target.value)}
-              placeholder="ask about this item..."
-              rows={3}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20 resize-none"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={sendMessage}
-                disabled={sending || !messageBody.trim()}
-                className="flex-1 bg-white/90 hover:bg-white disabled:bg-white/20 rounded-xl py-3 text-[#141414] disabled:text-white/30 text-sm tracking-[0.2em] font-medium transition-all"
-              >
-                {sending ? '—' : 'send'}
-              </button>
-              <button
-                onClick={() => setShowDmInput(false)}
-                className="px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white/40 text-xs tracking-widest"
-              >
-                cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Sent confirmation */}
-        {messageSent && !showDmInput && (
-          <p className="text-white/30 text-xs tracking-[0.2em] text-center pb-1">message sent</p>
-        )}
-
-        {/* Save + DM buttons */}
-        <div className="flex gap-2">
-          <button
-            onClick={handleSave}
-            disabled={saveLoading}
-            className={`flex-1 py-3.5 rounded-xl text-sm tracking-[0.15em] border transition-all ${
-              isSaved
-                ? 'bg-white/10 border-white/20 text-white/60'
-                : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20 hover:text-white/60'
-            }`}
-          >
-            {isSaved ? '♥ saved' : '♡ save'}
-          </button>
-          {!messageSent && thread.length === 0 && !showDmInput && (
-            <button
-              onClick={handleDmClick}
-              className="flex-1 py-3.5 rounded-xl text-sm tracking-[0.15em] border bg-white/5 border-white/10 text-white/40 hover:border-white/20 hover:text-white/60 transition-all"
-            >
-              message
-            </button>
-          )}
-        </div>
+        <button
+          onClick={handleSave}
+          disabled={saveLoading}
+          className={`w-full py-3.5 rounded-xl text-sm tracking-[0.15em] border transition-all ${
+            isSaved
+              ? 'bg-white/10 border-white/20 text-white/60'
+              : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20 hover:text-white/60'
+          }`}
+        >
+          {isSaved ? '♥ saved' : '♡ save'}
+        </button>
       </div>
 
       {/* Auth modal */}

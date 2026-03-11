@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import ItemDetail from '../components/ItemDetail'
 import AddItemButton from '../components/AddItemButton'
 import AddItemModal from '../components/AddItemModal'
 import ArchiveGrid from '../components/ArchiveGrid'
+import Rack from '../components/Rack'
+import ViewToggle from '../components/ViewToggle'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function timeAgo(dateStr) {
@@ -95,13 +97,22 @@ function BulletinTab({ vendor }) {
   const [followerCount, setFollowerCount] = useState(0)
   const [locations, setLocations] = useState([])
 
+  const [composeOpen, setComposeOpen] = useState(false)
   const [postType, setPostType] = useState('general')
   const [body, setBody] = useState('')
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [locationId, setLocationId] = useState('')
+  const [expiryDuration, setExpiryDuration] = useState('none')
   const [posting, setPosting] = useState(false)
   const fileInputRef = useRef(null)
+
+  const EXPIRY_OPTIONS = [
+    { value: 'none', label: 'No expiry' },
+    { value: '24h', label: '24 hours' },
+    { value: '3d', label: '3 days' },
+    { value: '7d', label: '7 days' },
+  ]
 
   useEffect(() => {
     loadData()
@@ -109,7 +120,7 @@ function BulletinTab({ vendor }) {
 
   const loadData = async () => {
     const [{ count }, { data: bulletins }, { data: locs }] = await Promise.all([
-      supabase.from('follows').select('id', { count: 'exact', head: true }).eq('vendor_id', vendor.id),
+      supabase.from('follows').select('*', { count: 'exact', head: true }).eq('vendor_id', vendor.id),
       supabase.from('bulletins').select('*, locations(name)').eq('vendor_id', vendor.id).order('created_at', { ascending: false }),
       supabase.from('vendor_locations').select('*, locations(id, name)').eq('vendor_id', vendor.id),
     ])
@@ -146,12 +157,19 @@ function BulletinTab({ vendor }) {
       }
     }
 
+    let expiresAt = null
+    if (expiryDuration !== 'none') {
+      const ms = expiryDuration === '24h' ? 24*60*60*1000 : expiryDuration === '3d' ? 3*24*60*60*1000 : 7*24*60*60*1000
+      expiresAt = new Date(Date.now() + ms).toISOString()
+    }
+
     const row = {
       vendor_id: vendor.id,
       type: postType,
       body: body.trim(),
       image_url: imageUrl,
       location_id: (postType === 'appearing' && locationId) ? locationId : null,
+      expires_at: expiresAt,
     }
 
     const { data: newPost, error } = await supabase
@@ -165,7 +183,9 @@ function BulletinTab({ vendor }) {
       setBody('')
       setPostType('general')
       setLocationId('')
+      setExpiryDuration('none')
       clearImage()
+      setComposeOpen(false)
     }
     setPosting(false)
   }
@@ -191,73 +211,125 @@ function BulletinTab({ vendor }) {
         </div>
       </div>
 
-      {/* Compose */}
-      <div className="bg-white/3 border border-white/5 rounded-xl p-4 space-y-3">
-        <div className="flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
-          {POST_TYPES.map(t => (
-            <button
-              key={t.value}
-              onClick={() => setPostType(t.value)}
-              className={`flex-shrink-0 text-[10px] tracking-[0.12em] px-2.5 py-1 rounded-full border transition-all ${
-                postType === t.value
-                  ? 'border-white/30 text-white/60 bg-white/5'
-                  : 'border-white/8 text-white/25 hover:border-white/15'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="relative">
-          <textarea
-            value={body}
-            onChange={e => setBody(e.target.value.slice(0, 280))}
-            placeholder="what's happening..."
-            rows={3}
-            className="w-full bg-transparent text-white/70 text-sm tracking-wide leading-relaxed focus:outline-none placeholder:text-white/15 resize-none"
-          />
-          <span className={`absolute bottom-0 right-0 text-[9px] tracking-wide ${body.length > 260 ? 'text-red-400/60' : 'text-white/15'}`}>
-            {280 - body.length}
-          </span>
-        </div>
-
-        {postType === 'appearing' && locations.length > 0 && (
-          <select
-            value={locationId}
-            onChange={e => setLocationId(e.target.value)}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white/60 text-xs tracking-wide focus:outline-none focus:border-white/25"
+      {/* Compose toggle / area */}
+      <AnimatePresence>
+        {composeOpen ? (
+          <motion.div
+            key="compose"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
           >
-            <option value="">select location...</option>
-            {locations.map(vl => (
-              <option key={vl.locations?.id || vl.id} value={vl.locations?.id || vl.location_id}>
-                {vl.locations?.name || 'Unknown'}
-              </option>
-            ))}
-          </select>
-        )}
+            <div className="bg-white/3 border border-white/5 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex gap-1.5 overflow-x-auto flex-1" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                  {POST_TYPES.map(t => (
+                    <button
+                      key={t.value}
+                      onClick={() => setPostType(t.value)}
+                      className={`flex-shrink-0 text-[10px] tracking-[0.12em] px-2.5 py-1 rounded-full border transition-all ${
+                        postType === t.value
+                          ? 'border-white/30 text-white/60 bg-white/5'
+                          : 'border-white/8 text-white/25 hover:border-white/15'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => { setComposeOpen(false); setBody(''); setPostType('general'); setLocationId(''); setExpiryDuration('none'); clearImage() }}
+                  className="text-white/20 text-xs ml-3 hover:text-white/40 transition-colors flex-shrink-0"
+                >
+                  &times;
+                </button>
+              </div>
 
-        {imagePreview && (
-          <div className="relative inline-block">
-            <img src={imagePreview} alt="" className="h-20 rounded-lg object-cover" />
-            <button onClick={clearImage} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-black/80 rounded-full text-white/50 text-xs flex items-center justify-center">&times;</button>
-          </div>
-        )}
+              <div className="relative">
+                <textarea
+                  value={body}
+                  onChange={e => setBody(e.target.value.slice(0, 280))}
+                  placeholder="what's happening..."
+                  rows={3}
+                  className="w-full bg-transparent text-white/70 text-sm tracking-wide leading-relaxed focus:outline-none placeholder:text-white/15 resize-none"
+                />
+                <span className={`absolute bottom-0 right-0 text-[9px] tracking-wide ${body.length > 260 ? 'text-red-400/60' : 'text-white/15'}`}>
+                  {280 - body.length}
+                </span>
+              </div>
 
-        <div className="flex items-center justify-between pt-1">
-          <div className="flex gap-2">
-            <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
-            <button onClick={() => fileInputRef.current?.click()} className="text-white/20 text-[10px] tracking-[0.15em] hover:text-white/40 transition-colors">+ image</button>
-          </div>
+              {postType === 'appearing' && locations.length > 0 && (
+                <select
+                  value={locationId}
+                  onChange={e => setLocationId(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white/60 text-xs tracking-wide focus:outline-none focus:border-white/25"
+                >
+                  <option value="">select location...</option>
+                  {locations.map(vl => (
+                    <option key={vl.locations?.id || vl.id} value={vl.locations?.id || vl.location_id}>
+                      {vl.locations?.name || 'Unknown'}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {/* Expiry selector */}
+              <div>
+                <p className="text-white/20 text-[10px] tracking-[0.15em] mb-1.5">keep active for</p>
+                <div className="flex gap-1.5 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+                  {EXPIRY_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setExpiryDuration(opt.value)}
+                      className={`flex-shrink-0 text-[10px] tracking-[0.12em] px-2.5 py-1 rounded-full border transition-all ${
+                        expiryDuration === opt.value
+                          ? 'border-white/30 text-white/60 bg-white/5'
+                          : 'border-white/8 text-white/25 hover:border-white/15'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {imagePreview && (
+                <div className="relative inline-block">
+                  <img src={imagePreview} alt="" className="h-20 rounded-lg object-cover" />
+                  <button onClick={clearImage} className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-black/80 rounded-full text-white/50 text-xs flex items-center justify-center">&times;</button>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <div className="flex gap-2">
+                  <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImagePick} className="hidden" />
+                  <button onClick={() => fileInputRef.current?.click()} className="text-white/20 text-[10px] tracking-[0.15em] hover:text-white/40 transition-colors">+ image</button>
+                </div>
+                <button
+                  onClick={handlePost}
+                  disabled={posting || !body.trim()}
+                  className="bg-white/90 hover:bg-white disabled:bg-white/20 rounded-full px-4 py-1.5 text-[#141414] disabled:text-white/30 text-[11px] tracking-[0.15em] font-medium transition-all"
+                >
+                  {posting ? '...' : 'post'}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        ) : (
           <button
-            onClick={handlePost}
-            disabled={posting || !body.trim()}
-            className="bg-white/90 hover:bg-white disabled:bg-white/20 rounded-full px-4 py-1.5 text-[#141414] disabled:text-white/30 text-[11px] tracking-[0.15em] font-medium transition-all"
+            onClick={() => setComposeOpen(true)}
+            className="w-full bg-white/5 border border-white/10 rounded-xl py-3 text-white/40 text-[11px] tracking-[0.2em] hover:border-white/20 hover:text-white/60 transition-all flex items-center justify-center gap-2"
           >
-            {posting ? '...' : 'post'}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 01-3.46 0" />
+            </svg>
+            create new bulletin
           </button>
-        </div>
-      </div>
+        )}
+      </AnimatePresence>
 
       {/* Past posts */}
       {posts === null ? (
@@ -270,25 +342,53 @@ function BulletinTab({ vendor }) {
         </div>
       ) : (
         <div className="space-y-3">
-          {posts.map(post => (
-            <div key={post.id} className="bg-white/3 border border-white/5 rounded-xl p-4 space-y-2">
-              {TYPE_BADGES[post.type] && (
-                <span className="inline-block text-[10px] tracking-[0.15em] text-white/40 bg-white/5 border border-white/8 rounded-full px-2.5 py-0.5">
-                  {TYPE_BADGES[post.type]}
-                </span>
-              )}
-              {post.body && <p className="text-white/45 text-sm tracking-wide leading-relaxed">{post.body}</p>}
-              {post.image_url && <img src={post.image_url} alt="" className="rounded-lg max-h-48 object-cover" />}
-              {post.locations?.name && <p className="text-white/25 text-[10px] tracking-[0.12em]">{post.locations.name}</p>}
-              <div className="flex items-center justify-between pt-1">
-                <div className="flex items-center gap-3">
-                  <span className="text-white/15 text-[10px] tracking-[0.15em]">{timeAgo(post.created_at)}</span>
-                  <span className="text-white/12 text-[9px] tracking-wide">Reached {followerCount} followers</span>
+          {posts.map(post => {
+            const isExpired = post.expires_at && new Date(post.expires_at) < new Date()
+            let expiryLabel = null
+            if (post.expires_at) {
+              if (isExpired) {
+                expiryLabel = 'Expired'
+              } else {
+                const hoursLeft = Math.max(0, (new Date(post.expires_at) - new Date()) / (1000 * 60 * 60))
+                expiryLabel = hoursLeft < 24
+                  ? `Expires in ${Math.ceil(hoursLeft)}h`
+                  : `Expires in ${Math.ceil(hoursLeft / 24)}d`
+              }
+            }
+            return (
+              <div key={post.id} className={`bg-white/3 border border-white/5 rounded-xl p-4 space-y-2 ${isExpired ? 'opacity-40' : ''}`}>
+                <div className="flex items-center gap-2">
+                  {TYPE_BADGES[post.type] && (
+                    <span className="inline-block text-[10px] tracking-[0.15em] text-white/40 bg-white/5 border border-white/8 rounded-full px-2.5 py-0.5">
+                      {TYPE_BADGES[post.type]}
+                    </span>
+                  )}
+                  {expiryLabel && (
+                    <span className={`text-[9px] tracking-[0.12em] ${isExpired ? 'text-white/25' : 'text-white/20'}`}>
+                      {expiryLabel}
+                    </span>
+                  )}
                 </div>
-                <button onClick={() => handleDelete(post.id)} className="text-white/15 text-[10px] tracking-[0.15em] hover:text-red-400/50 transition-colors">delete</button>
+                {post.body && <p className="text-white/45 text-sm tracking-wide leading-relaxed">{post.body}</p>}
+                {post.image_url && <img src={post.image_url} alt="" className="rounded-lg max-h-48 object-cover" />}
+                {post.locations?.name && <p className="text-white/25 text-[10px] tracking-[0.12em]">{post.locations.name}</p>}
+                <div className="flex items-center justify-between pt-1">
+                  <div className="flex items-center gap-3">
+                    <span className="text-white/15 text-[10px] tracking-[0.15em]">{timeAgo(post.created_at)}</span>
+                    <span className="text-white/12 text-[9px] tracking-wide">Reached {followerCount} followers</span>
+                    {(post.likes_count > 0 || post.comments_count > 0) && (
+                      <span className="text-white/15 text-[9px] tracking-wide">
+                        {post.likes_count > 0 && `♥ ${post.likes_count}`}
+                        {post.likes_count > 0 && post.comments_count > 0 && ' · '}
+                        {post.comments_count > 0 && `💬 ${post.comments_count}`}
+                      </span>
+                    )}
+                  </div>
+                  <button onClick={() => handleDelete(post.id)} className="text-white/15 text-[10px] tracking-[0.15em] hover:text-red-400/50 transition-colors">delete</button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -301,6 +401,7 @@ function BulletinTab({ vendor }) {
 function CollectionTab({ vendor, onItemClick }) {
   const [items, setItems] = useState([])
   const [showAddModal, setShowAddModal] = useState(false)
+  const [view, setView] = useState('grid')
 
   useEffect(() => {
     fetchItems()
@@ -321,14 +422,21 @@ function CollectionTab({ vendor, onItemClick }) {
     fetchItems()
   }
 
+  const activeItems = items.filter(i => i.status === 'active')
+
   return (
     <>
+      {/* View toggle */}
+      <div className="flex justify-end px-6 pb-3">
+        <ViewToggle view={view} onChange={setView} />
+      </div>
+
       <div className="pb-20">
         {items.length === 0 ? (
           <div className="flex items-center justify-center h-48">
             <p className="text-white/15 text-sm tracking-[0.3em]">no items yet</p>
           </div>
-        ) : (
+        ) : view === 'grid' ? (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-0.5 bg-[#0a0a0a]">
             {items.map(item => (
               <button
@@ -349,6 +457,8 @@ function CollectionTab({ vendor, onItemClick }) {
               </button>
             ))}
           </div>
+        ) : (
+          <Rack items={activeItems} onItemClick={onItemClick} onActiveItemChange={() => {}} />
         )}
       </div>
 

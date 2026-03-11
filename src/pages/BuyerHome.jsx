@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabase'
 import BuyerItemDetail from '../components/BuyerItemDetail'
 import AuthModal from '../components/AuthModal'
@@ -130,6 +130,13 @@ function Header({ sectionName, user }) {
 function BulletinTab({ user }) {
   const [posts, setPosts] = useState(null)
   const [readIds, setReadIds] = useState(new Set())
+  const [likedIds, setLikedIds] = useState(new Set())
+  const [comments, setComments] = useState({})
+  const [commentInputs, setCommentInputs] = useState({})
+  const [postingComment, setPostingComment] = useState({})
+  const [focusedInput, setFocusedInput] = useState(null)
+  const [detailPost, setDetailPost] = useState(null)
+  const [authModal, setAuthModal] = useState(null)
 
   useEffect(() => {
     if (!user) return
@@ -139,13 +146,85 @@ function BulletinTab({ user }) {
       .eq('follower_id', user.id)
       .order('created_at', { ascending: false })
       .then(({ data }) => {
-        console.log('[BulletinTab] raw bulletin_feed:', data?.slice(0, 3))
-        setPosts(data ?? [])
+        const now = new Date().toISOString()
+        const filtered = (data ?? []).filter(p => !p.expires_at || p.expires_at > now)
+        setPosts(filtered)
+      })
+
+    // Load user's likes
+    supabase
+      .from('bulletin_likes')
+      .select('bulletin_id')
+      .eq('profile_id', user.id)
+      .then(({ data }) => {
+        setLikedIds(new Set((data ?? []).map(l => l.bulletin_id)))
       })
   }, [user])
 
   const markRead = (id) => {
     setReadIds(prev => new Set([...prev, id]))
+  }
+
+  const toggleLike = async (postId) => {
+    if (!user) {
+      setAuthModal({
+        hint: 'sign in to like posts',
+        onSuccess: (u) => { setAuthModal(null) },
+      })
+      return
+    }
+    const isLiked = likedIds.has(postId)
+    if (isLiked) {
+      await supabase.from('bulletin_likes').delete().eq('profile_id', user.id).eq('bulletin_id', postId)
+      setLikedIds(prev => { const s = new Set(prev); s.delete(postId); return s })
+      setPosts(prev => prev.map(p => p.id === postId ? { ...p, likes_count: Math.max(0, (p.likes_count || 1) - 1) } : p))
+    } else {
+      await supabase.from('bulletin_likes').insert({ profile_id: user.id, bulletin_id: postId })
+      setLikedIds(prev => new Set([...prev, postId]))
+      setPosts(prev => prev.map(p => p.id === postId ? { ...p, likes_count: (p.likes_count || 0) + 1 } : p))
+    }
+  }
+
+  const loadComments = async (postId) => {
+    if (comments[postId]) return
+    const { data } = await supabase
+      .from('bulletin_comments')
+      .select('*, profiles(display_name, avatar_url)')
+      .eq('bulletin_id', postId)
+      .order('created_at', { ascending: true })
+    setComments(prev => ({ ...prev, [postId]: data ?? [] }))
+  }
+
+  const submitComment = async (postId) => {
+    if (!user) {
+      setAuthModal({
+        hint: 'sign in to comment',
+        onSuccess: (u) => { setAuthModal(null) },
+      })
+      return
+    }
+    const body = (commentInputs[postId] || '').trim()
+    if (!body) return
+    setPostingComment(prev => ({ ...prev, [postId]: true }))
+
+    const { data: newComment } = await supabase
+      .from('bulletin_comments')
+      .insert({ bulletin_id: postId, profile_id: user.id, body })
+      .select('*, profiles(display_name, avatar_url)')
+      .single()
+
+    if (newComment) {
+      setComments(prev => ({ ...prev, [postId]: [...(prev[postId] || []), newComment] }))
+      setCommentInputs(prev => ({ ...prev, [postId]: '' }))
+      setPosts(prev => prev.map(p => p.id === postId ? { ...p, comments_count: (p.comments_count || 0) + 1 } : p))
+    }
+    setPostingComment(prev => ({ ...prev, [postId]: false }))
+    setFocusedInput(null)
+  }
+
+  const openDetail = (post) => {
+    loadComments(post.id)
+    setDetailPost(post)
   }
 
   if (posts === null) {
@@ -166,61 +245,292 @@ function BulletinTab({ user }) {
   }
 
   return (
-    <div className="space-y-3 px-5">
-      {posts.map(post => {
-        const isUnread = !readIds.has(post.id)
-        return (
-          <div
-            key={post.id}
-            className="bg-white/3 border border-white/5 rounded-xl p-4 space-y-2"
-            onClick={() => markRead(post.id)}
-          >
-            {/* Vendor row */}
-            <div className="flex items-center gap-3">
-              {(post.vendor_avatar_url || post.avatar_url) ? (
-                <img src={post.vendor_avatar_url || post.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover" />
-              ) : (
-                <div className="w-7 h-7 rounded-full bg-white/10" />
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-white/60 text-xs tracking-[0.1em] truncate">{post.vendor_display_name || post.display_name}</span>
-                  <span className="text-white/20 text-[10px] tracking-[0.1em] truncate">@{post.vendor_handle || post.handle}</span>
+    <>
+      <div className="space-y-3 px-5">
+        {posts.map(post => {
+          const isUnread = !readIds.has(post.id)
+          const isLiked = likedIds.has(post.id)
+          const isFocused = focusedInput === post.id
+
+          return (
+            <div
+              key={post.id}
+              className="bg-white/3 border border-white/5 rounded-xl overflow-hidden"
+              onClick={() => markRead(post.id)}
+            >
+              {/* Tappable content area → opens detail sheet */}
+              <div
+                className="p-4 space-y-2 cursor-pointer active:bg-white/2 transition-colors"
+                onClick={() => openDetail(post)}
+              >
+                {/* Vendor row */}
+                <div className="flex items-center gap-3">
+                  {(post.vendor_avatar_url || post.avatar_url) ? (
+                    <img src={post.vendor_avatar_url || post.avatar_url} alt="" className="w-7 h-7 rounded-full object-cover" />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-white/10" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white/60 text-xs tracking-[0.1em] truncate">{post.vendor_display_name || post.display_name}</span>
+                      <span className="text-white/20 text-[10px] tracking-[0.1em] truncate">@{post.vendor_handle || post.handle}</span>
+                    </div>
+                  </div>
+                  {isUnread && <div className="w-1.5 h-1.5 rounded-full bg-white/50 flex-shrink-0" />}
+                </div>
+
+                {/* Type badge */}
+                {TYPE_BADGES[post.post_type] && (
+                  <span className="inline-block text-[10px] tracking-[0.15em] text-white/40 bg-white/5 border border-white/8 rounded-full px-2.5 py-0.5">
+                    {TYPE_BADGES[post.post_type]}
+                  </span>
+                )}
+
+                {/* Image */}
+                {post.image_url && (
+                  <div className="rounded-lg overflow-hidden">
+                    <img src={post.image_url} alt="" className="w-full object-cover max-h-64" />
+                  </div>
+                )}
+
+                {/* Body */}
+                {post.body && (
+                  <p className="text-white/45 text-sm tracking-wide leading-relaxed">{post.body}</p>
+                )}
+
+                {/* Timestamp */}
+                <span className="text-white/15 text-[10px] tracking-[0.15em] block">{timeAgo(post.created_at)}</span>
+              </div>
+
+              {/* Interaction row — card-style treatment */}
+              <div className="border-t border-white/5 px-4 py-2.5 flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+                <button
+                  onClick={() => toggleLike(post.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                    isLiked
+                      ? 'bg-white/8 text-white/60'
+                      : 'bg-white/3 text-white/25 hover:bg-white/5 hover:text-white/45'
+                  }`}
+                >
+                  <span className="text-sm">{isLiked ? '♥' : '♡'}</span>
+                  <span className="text-[11px] tracking-[0.1em]">Like</span>
+                  {(post.likes_count || 0) > 0 && (
+                    <span className="text-[10px] tracking-wide ml-0.5">{post.likes_count}</span>
+                  )}
+                </button>
+                <button
+                  onClick={() => openDetail(post)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/3 text-white/25 hover:bg-white/5 hover:text-white/45 transition-all"
+                >
+                  <span className="text-sm">💬</span>
+                  <span className="text-[11px] tracking-[0.1em]">Comment</span>
+                  {(post.comments_count || 0) > 0 && (
+                    <span className="text-[10px] tracking-wide ml-0.5">{post.comments_count}</span>
+                  )}
+                </button>
+                <a
+                  href={`/v/${post.vendor_handle || post.handle}`}
+                  className="text-white/20 text-[10px] tracking-[0.1em] hover:text-white/40 transition-colors ml-auto"
+                >
+                  Visit shop &rarr;
+                </a>
+              </div>
+
+              {/* Inline comment input — always visible */}
+              <div className="border-t border-white/5 px-4 py-2" onClick={(e) => e.stopPropagation()}>
+                <div className="flex gap-2">
+                  <input
+                    value={commentInputs[post.id] || ''}
+                    onChange={(e) => setCommentInputs(prev => ({ ...prev, [post.id]: e.target.value }))}
+                    onKeyDown={(e) => e.key === 'Enter' && submitComment(post.id)}
+                    onFocus={() => setFocusedInput(post.id)}
+                    onBlur={() => setTimeout(() => setFocusedInput(null), 150)}
+                    placeholder="Add a comment..."
+                    className="flex-1 bg-white/3 border border-white/8 rounded-lg px-3 py-2 text-white/60 text-xs tracking-wide focus:outline-none focus:border-white/20 focus:bg-white/5 placeholder:text-white/15 transition-all"
+                  />
+                  {isFocused && (
+                    <button
+                      onClick={() => submitComment(post.id)}
+                      disabled={postingComment[post.id] || !(commentInputs[post.id] || '').trim()}
+                      className="bg-white/10 hover:bg-white/15 disabled:bg-white/5 disabled:text-white/15 rounded-lg px-3 py-2 text-white/50 text-[10px] tracking-[0.15em] transition-all"
+                    >
+                      {postingComment[post.id] ? '...' : 'Post'}
+                    </button>
+                  )}
                 </div>
               </div>
-              {isUnread && <div className="w-1.5 h-1.5 rounded-full bg-white/50 flex-shrink-0" />}
             </div>
+          )
+        })}
+      </div>
 
-            {/* Type badge */}
+      {/* Bulletin detail sheet */}
+      <AnimatePresence>
+        {detailPost && (
+          <BulletinDetailSheet
+            key="bulletin-detail"
+            post={detailPost}
+            comments={comments[detailPost.id] || []}
+            isLiked={likedIds.has(detailPost.id)}
+            onToggleLike={() => toggleLike(detailPost.id)}
+            commentInput={commentInputs[detailPost.id] || ''}
+            onCommentChange={(val) => setCommentInputs(prev => ({ ...prev, [detailPost.id]: val }))}
+            onSubmitComment={() => submitComment(detailPost.id)}
+            isPosting={!!postingComment[detailPost.id]}
+            onClose={() => setDetailPost(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {authModal && (
+          <AuthModal
+            key="bulletin-auth"
+            hint={authModal.hint}
+            onClose={() => setAuthModal(null)}
+            onSuccess={authModal.onSuccess}
+          />
+        )}
+      </AnimatePresence>
+    </>
+  )
+}
+
+// ── Bulletin Detail Bottom Sheet ─────────────────────────────────────────────
+function BulletinDetailSheet({ post, comments, isLiked, onToggleLike, commentInput, onCommentChange, onSubmitComment, isPosting, onClose }) {
+  const dragStartY = useRef(0)
+  const inputRef = useRef(null)
+
+  const handlePointerDown = (e) => {
+    dragStartY.current = e.clientY
+  }
+
+  const handlePointerUp = (e) => {
+    if (e.clientY - dragStartY.current > 80) onClose()
+  }
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-50"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+
+      {/* Sheet */}
+      <motion.div
+        className="absolute bottom-0 left-0 right-0 bg-[#141414] border-t border-white/10 rounded-t-2xl max-h-[85vh] flex flex-col"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        style={{ touchAction: 'none' }}
+      >
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-8 h-1 rounded-full bg-white/15" />
+        </div>
+
+        {/* Header with like + close */}
+        <div className="flex items-center justify-between px-5 pb-3 border-b border-white/5">
+          <div className="flex items-center gap-3">
+            {(post.vendor_avatar_url || post.avatar_url) ? (
+              <img src={post.vendor_avatar_url || post.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover" />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-white/10" />
+            )}
+            <div>
+              <span className="text-white/60 text-xs tracking-[0.1em]">{post.vendor_display_name || post.display_name}</span>
+              <span className="text-white/20 text-[10px] tracking-[0.1em] ml-2">@{post.vendor_handle || post.handle}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onToggleLike}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                isLiked ? 'bg-white/8 text-white/60' : 'bg-white/3 text-white/25 hover:text-white/45'
+              }`}
+            >
+              <span className="text-sm">{isLiked ? '♥' : '♡'}</span>
+              <span className="text-[10px] tracking-wide">{post.likes_count || 0}</span>
+            </button>
+            <button onClick={onClose} className="text-white/25 hover:text-white/50 text-lg transition-colors">&times;</button>
+          </div>
+        </div>
+
+        {/* Post content */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="px-5 py-4 space-y-3 border-b border-white/5">
             {TYPE_BADGES[post.post_type] && (
               <span className="inline-block text-[10px] tracking-[0.15em] text-white/40 bg-white/5 border border-white/8 rounded-full px-2.5 py-0.5">
                 {TYPE_BADGES[post.post_type]}
               </span>
             )}
 
-            {/* Body */}
-            {post.body && (
-              <p className="text-white/45 text-sm tracking-wide leading-relaxed">{post.body}</p>
+            {post.image_url && (
+              <div className="rounded-lg overflow-hidden">
+                <img src={post.image_url} alt="" className="w-full object-cover max-h-72" />
+              </div>
             )}
 
-            {/* Footer */}
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-white/15 text-[10px] tracking-[0.15em]">{timeAgo(post.created_at)}</span>
-              <div className="flex gap-3">
-                <button className="text-white/20 text-[10px] tracking-[0.15em] hover:text-white/40 transition-colors">save</button>
-                <button className="text-white/20 text-[10px] tracking-[0.15em] hover:text-white/40 transition-colors">share</button>
-                <a
-                  href={`/v/${post.vendor_handle || post.handle}`}
-                  className="text-white/20 text-[10px] tracking-[0.15em] hover:text-white/40 transition-colors"
-                >
-                  visit shop
-                </a>
-              </div>
-            </div>
+            {post.body && (
+              <p className="text-white/50 text-sm tracking-wide leading-relaxed">{post.body}</p>
+            )}
+
+            <span className="text-white/15 text-[10px] tracking-[0.15em] block">{timeAgo(post.created_at)}</span>
           </div>
-        )
-      })}
-    </div>
+
+          {/* Comments */}
+          <div className="px-5 py-3 space-y-3">
+            <p className="text-white/25 text-[10px] tracking-[0.2em]">{comments.length} comment{comments.length !== 1 ? 's' : ''}</p>
+
+            {comments.length === 0 && (
+              <p className="text-white/12 text-xs tracking-wide py-4 text-center">No comments yet — be the first</p>
+            )}
+
+            {comments.map(c => (
+              <div key={c.id} className="flex gap-2.5">
+                {c.profiles?.avatar_url ? (
+                  <img src={c.profiles.avatar_url} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0 mt-0.5" />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-white/10 flex-shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white/45 text-[11px] tracking-[0.1em]">{c.profiles?.display_name || 'anon'}</span>
+                    <span className="text-white/15 text-[9px] tracking-wide">{timeAgo(c.created_at)}</span>
+                  </div>
+                  <p className="text-white/40 text-xs tracking-wide leading-relaxed mt-0.5">{c.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Comment input at bottom */}
+        <div className="border-t border-white/5 px-5 py-3 flex gap-2" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+          <input
+            ref={inputRef}
+            value={commentInput}
+            onChange={(e) => onCommentChange(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && onSubmitComment()}
+            placeholder="Add a comment..."
+            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-white/60 text-sm tracking-wide focus:outline-none focus:border-white/20 placeholder:text-white/15"
+          />
+          <button
+            onClick={onSubmitComment}
+            disabled={isPosting || !commentInput.trim()}
+            className="bg-white/90 hover:bg-white disabled:bg-white/20 rounded-xl px-4 py-2.5 text-[#141414] disabled:text-white/30 text-xs tracking-[0.15em] font-medium transition-all"
+          >
+            {isPosting ? '...' : 'Post'}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
   )
 }
 
@@ -393,6 +703,7 @@ function ExploreTab({ user }) {
 function LocalMap() {
   const [pins, setPins] = useState(null)
   const [selectedPin, setSelectedPin] = useState(null)
+  const [vendorSheetLocation, setVendorSheetLocation] = useState(null)
   const mapRef = useRef(null)
   const [MapComponents, setMapComponents] = useState(null)
 
@@ -473,16 +784,50 @@ function LocalMap() {
       {/* Bottom popup card */}
       <AnimatePresence>
         {selectedPin && (
-          <PinPopup pin={selectedPin} onClose={() => setSelectedPin(null)} />
+          <PinPopup
+            pin={selectedPin}
+            onClose={() => setSelectedPin(null)}
+            onViewVendors={(pin) => {
+              setSelectedPin(null)
+              setVendorSheetLocation(pin)
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Vendor bottom sheet */}
+      <AnimatePresence>
+        {vendorSheetLocation && (
+          <VendorBottomSheet
+            key="vendor-sheet"
+            location={vendorSheetLocation}
+            onClose={() => setVendorSheetLocation(null)}
+          />
         )}
       </AnimatePresence>
     </div>
   )
 }
 
-function PinPopup({ pin, onClose }) {
-  const isMarket = pin.location_type === 'market'
+function InstagramIcon({ className = '' }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <circle cx="12" cy="12" r="5" />
+      <circle cx="17.5" cy="6.5" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function PinPopup({ pin, onClose, onViewVendors }) {
+  const isMarket = pin.location_type === 'market' || pin.location_type === 'pop_up'
   const popLevel = pin.pop_level || 1
+
+  const handleCTA = () => {
+    if (isMarket) {
+      onViewVendors(pin)
+    }
+  }
 
   return (
     <div
@@ -496,7 +841,19 @@ function PinPopup({ pin, onClose }) {
           </span>
           <h3 className="text-white/70 text-sm tracking-[0.1em] mt-0.5">{pin.name}</h3>
         </div>
-        <button onClick={onClose} className="text-white/25 hover:text-white/50 text-lg transition-colors">&times;</button>
+        <div className="flex items-center gap-2">
+          {pin.instagram_handle && (
+            <a
+              href={`https://instagram.com/${pin.instagram_handle}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-white/30 hover:text-white/60 transition-colors"
+            >
+              <InstagramIcon />
+            </a>
+          )}
+          <button onClick={onClose} className="text-white/25 hover:text-white/50 text-lg transition-colors">&times;</button>
+        </div>
       </div>
 
       {pin.address && <p className="text-white/30 text-[10px] tracking-wide">{pin.address}</p>}
@@ -525,10 +882,124 @@ function PinPopup({ pin, onClose }) {
         <p className="text-white/20 text-[10px] tracking-[0.15em]">{pin.vendor_count} vendors</p>
       )}
 
-      <button className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 text-white/50 text-[11px] tracking-[0.2em] hover:border-white/20 hover:text-white/70 transition-all mt-1">
-        {isMarket ? `See ${pin.vendor_count || ''} vendors` : 'Visit shop'} &rarr;
+      <button
+        onClick={handleCTA}
+        className="w-full bg-white/5 border border-white/10 rounded-xl py-2.5 text-white/50 text-[11px] tracking-[0.2em] hover:border-white/20 hover:text-white/70 transition-all mt-1"
+      >
+        {isMarket ? 'View collections' : 'Visit shop'} &rarr;
       </button>
     </div>
+  )
+}
+
+// ── Vendor Bottom Sheet (for map locations) ──────────────────────────────────
+function VendorBottomSheet({ location, onClose }) {
+  const [vendors, setVendors] = useState(null)
+  const sheetRef = useRef(null)
+  const dragStartY = useRef(0)
+
+  useEffect(() => {
+    if (!location) return
+    supabase
+      .from('vendor_locations')
+      .select('vendors(id, booth_name, profile_id, profiles(handle, display_name, avatar_url))')
+      .eq('location_id', location.id)
+      .then(({ data }) => {
+        const list = (data ?? []).map(d => d.vendors).filter(Boolean)
+        setVendors(list)
+      })
+  }, [location])
+
+  const handlePointerDown = (e) => {
+    dragStartY.current = e.clientY
+  }
+
+  const handlePointerUp = (e) => {
+    if (e.clientY - dragStartY.current > 80) onClose()
+  }
+
+  if (!location) return null
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-50"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+
+      {/* Sheet */}
+      <motion.div
+        ref={sheetRef}
+        className="absolute bottom-0 left-0 right-0 bg-[#141414] border-t border-white/10 rounded-t-2xl max-h-[70vh] flex flex-col"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        style={{ touchAction: 'none' }}
+      >
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-8 h-1 rounded-full bg-white/15" />
+        </div>
+
+        {/* Header */}
+        <div className="px-5 pb-3 border-b border-white/5">
+          <h3 className="text-white/70 text-sm tracking-[0.1em]">{location.name}</h3>
+          <p className="text-white/25 text-[10px] tracking-[0.2em] mt-0.5">Vendors at this market</p>
+        </div>
+
+        {/* Vendor list */}
+        <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+          {vendors === null ? (
+            <div className="flex justify-center py-8">
+              <div className="w-1 h-1 bg-white/20 rounded-full animate-ping" />
+            </div>
+          ) : vendors.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 gap-2">
+              <p className="text-white/20 text-sm tracking-[0.15em]">No vendors listed yet</p>
+              <p className="text-white/12 text-xs tracking-wide">check back soon</p>
+            </div>
+          ) : (
+            vendors.map(v => {
+              const profile = v.profiles
+              const handle = profile?.handle
+              const initial = (profile?.display_name?.[0] || '?').toUpperCase()
+
+              return (
+                <div key={v.id} className="flex items-center gap-3 bg-white/3 border border-white/5 rounded-xl p-3">
+                  {profile?.avatar_url ? (
+                    <img src={profile.avatar_url} alt="" className="w-10 h-10 rounded-full object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-white/30 text-sm flex-shrink-0">
+                      {initial}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white/60 text-xs tracking-[0.1em] truncate">{v.booth_name || profile?.display_name || 'Vendor'}</p>
+                    {handle && (
+                      <p className="text-white/25 text-[10px] tracking-[0.1em] mt-0.5">@{handle}</p>
+                    )}
+                  </div>
+                  {handle && (
+                    <a
+                      href={`/v/${handle}`}
+                      className="flex-shrink-0 text-[10px] tracking-[0.15em] text-white/40 hover:text-white/70 transition-colors"
+                    >
+                      View shop &rarr;
+                    </a>
+                  )}
+                </div>
+              )
+            })
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
   )
 }
 
