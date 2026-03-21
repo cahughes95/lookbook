@@ -74,7 +74,7 @@ export default function ItemCard({
       }}
     >
       <motion.div
-        className="w-full h-full rounded-sm overflow-hidden"
+        className="relative w-full h-full rounded-sm overflow-hidden"
         style={{
           boxShadow,
         }}
@@ -85,6 +85,14 @@ export default function ItemCard({
           className="w-full h-full object-cover pointer-events-none"
           draggable={false}
         />
+        {item.status === 'sold' && (
+          <>
+            <div className="absolute inset-0 bg-black/55 pointer-events-none rounded-sm" />
+            <div className="absolute top-5 left-[-32px] w-32 bg-white/90 text-[#141414] text-[10px] font-semibold tracking-[0.25em] text-center py-1.5 rotate-[-45deg] pointer-events-none z-10">
+              SOLD
+            </div>
+          </>
+        )}
       </motion.div>
     </motion.div>
   )

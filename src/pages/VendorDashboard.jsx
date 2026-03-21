@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { DndContext, closestCenter, DragOverlay, MouseSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core'
+import { SortableContext, rectSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { supabase } from '../lib/supabase'
 import ItemDetail from '../components/ItemDetail'
 import AddItemButton from '../components/AddItemButton'
@@ -8,6 +11,7 @@ import AddItemModal from '../components/AddItemModal'
 import ArchiveGrid from '../components/ArchiveGrid'
 import Rack from '../components/Rack'
 import ViewToggle from '../components/ViewToggle'
+import CategoryPills from '../components/CategoryPills'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function timeAgo(dateStr) {
@@ -396,24 +400,97 @@ function BulletinTab({ vendor }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SORTABLE ITEM CARD (dnd-kit)
+// ══════════════════════════════════════════════════════════════════════════════
+function ItemCardContent({ item, onItemClick, openMenuId, setOpenMenuId, handleMarkSold, handleArchive, handleDelete, actionLoading }) {
+  return (
+    <>
+      <button onClick={() => onItemClick(item)} className="w-full h-full block">
+        <img
+          src={item.image_url}
+          alt=""
+          className="w-full h-full object-cover"
+          draggable={false}
+          onContextMenu={e => e.preventDefault()}
+          style={{ WebkitTouchCallout: 'none', userSelect: 'none', WebkitUserSelect: 'none' }}
+        />
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === item.id ? null : item.id) }}
+        className="absolute top-1.5 right-1.5 bg-black/60 rounded-full w-7 h-7 flex items-center justify-center z-10"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="rgba(255,255,255,0.6)">
+          <circle cx="6" cy="2" r="1.2" /><circle cx="6" cy="6" r="1.2" /><circle cx="6" cy="10" r="1.2" />
+        </svg>
+      </button>
+      {openMenuId === item.id && (
+        <div onClick={(e) => e.stopPropagation()} className="absolute top-10 right-1.5 bg-[#1a1a1a] border border-white/10 rounded-lg z-20 min-w-[120px] py-1 shadow-lg">
+          <button onClick={() => handleMarkSold(item)} disabled={actionLoading === item.id} className="w-full text-left text-white/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 transition-colors disabled:opacity-40">Mark as Sold</button>
+          <button onClick={() => handleArchive(item)} disabled={actionLoading === item.id} className="w-full text-left text-white/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 transition-colors disabled:opacity-40">Archive</button>
+          <button onClick={() => handleDelete(item)} disabled={actionLoading === item.id} className="w-full text-left text-red-400/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 hover:text-red-400 transition-colors disabled:opacity-40">Delete</button>
+        </div>
+      )}
+    </>
+  )
+}
+
+function SortableItemCard({ item, isBeingDragged, ...cardProps }) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: item.id })
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition: transition ?? 'transform 200ms ease',
+        opacity: isBeingDragged ? 0 : 1,
+        zIndex: isBeingDragged ? 0 : undefined,
+        WebkitTouchCallout: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        willChange: 'transform',
+      }}
+      onContextMenu={e => e.preventDefault()}
+      {...attributes}
+      {...listeners}
+      className="relative aspect-square overflow-hidden bg-[#141414] cursor-grab active:cursor-grabbing touch-manipulation"
+    >
+      <ItemCardContent item={item} {...cardProps} />
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // COLLECTION TAB
 // ══════════════════════════════════════════════════════════════════════════════
 function CollectionTab({ vendor, onItemClick }) {
   const [items, setItems] = useState([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [view, setView] = useState('grid')
+  const [activeCategory, setActiveCategory] = useState('all')
+  const [openMenuId, setOpenMenuId] = useState(null)
+  const [actionLoading, setActionLoading] = useState(null)
+  const [pendingFiles, setPendingFiles] = useState(null)
+  const cameraRef = useRef(null)
 
   useEffect(() => {
     fetchItems()
   }, [vendor.id])
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!openMenuId) return
+    const handleClick = () => setOpenMenuId(null)
+    document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
+  }, [openMenuId])
 
   const fetchItems = async () => {
     const { data } = await supabase
       .from('items')
       .select('*')
       .eq('vendor_id', vendor.id)
-      .in('status', ['active', 'archived'])
-      .order('created_at', { ascending: false })
+      .in('status', ['active', 'sold'])
+      .order('position', { ascending: true, nullsFirst: false })
     if (data) setItems(data)
   }
 
@@ -422,13 +499,100 @@ function CollectionTab({ vendor, onItemClick }) {
     fetchItems()
   }
 
+  const handleMarkSold = async (item) => {
+    setActionLoading(item.id)
+    await supabase
+      .from('items')
+      .update({ status: 'sold', sold_at: new Date().toISOString() })
+      .eq('id', item.id)
+    setOpenMenuId(null)
+    await fetchItems()
+    setActionLoading(null)
+  }
+
+  const handleArchive = async (item) => {
+    setActionLoading(item.id)
+    await supabase
+      .from('items')
+      .update({ status: 'archived', archived_at: new Date().toISOString() })
+      .eq('id', item.id)
+    setOpenMenuId(null)
+    await fetchItems()
+    setActionLoading(null)
+  }
+
+  const handleDelete = async (item) => {
+    setActionLoading(item.id)
+    try {
+      if (item.image_url) {
+        const match = item.image_url.match(/\/item-images\/(.+)$/)
+        if (match) {
+          await supabase.storage.from('item-images').remove([match[1]])
+        }
+      }
+      // Delete child rows before the item (FK constraints)
+      await Promise.all([
+        supabase.from('item_ai_suggestions').delete().eq('item_id', item.id),
+        supabase.from('item_visibility_settings').delete().eq('item_id', item.id),
+        supabase.from('item_photos').delete().eq('item_id', item.id),
+        supabase.from('saves').delete().eq('item_id', item.id),
+      ])
+      const { error: deleteError } = await supabase
+        .from('items')
+        .delete()
+        .eq('id', item.id)
+      if (deleteError) {
+        console.error('Delete failed:', deleteError)
+        throw deleteError
+      }
+      setOpenMenuId(null)
+      await fetchItems()
+    } catch (err) {
+      console.error('handleDelete error:', err)
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const activeItems = items.filter(i => i.status === 'active')
+  const soldItems = items.filter(i => i.status === 'sold')
+  const sortedItems = [...activeItems, ...soldItems]
+  const displayItems = activeCategory === 'all' ? sortedItems : sortedItems.filter(i => i.category === activeCategory)
+
+  // dnd-kit reorder
+  const [activeDragId, setActiveDragId] = useState(null)
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } })
+  )
+
+  const handleDragStart = (event) => setActiveDragId(event.active.id)
+
+  const handleDragEnd = async (event) => {
+    setActiveDragId(null)
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const oldIndex = activeItems.findIndex(i => i.id === active.id)
+    const newIndex = activeItems.findIndex(i => i.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+    const reordered = arrayMove(activeItems, oldIndex, newIndex)
+    setItems([...reordered, ...items.filter(i => i.status === 'sold')])
+    const updates = reordered.map((item, index) =>
+      supabase.from('items').update({ position: index }).eq('id', item.id)
+    )
+    await Promise.all(updates)
+  }
+
+  const activeDragItem = activeDragId ? activeItems.find(i => i.id === activeDragId) : null
 
   return (
     <>
-      {/* View toggle */}
-      <div className="flex justify-end px-6 pb-3">
-        <ViewToggle view={view} onChange={setView} />
+      {/* Category pills + View toggle */}
+      <div className="px-6 pb-3 flex flex-col gap-3">
+        <CategoryPills items={items} activeCategory={activeCategory} onChange={setActiveCategory} />
+        <div className="flex justify-end">
+          <ViewToggle view={view} onChange={setView} />
+        </div>
       </div>
 
       <div className="pb-20">
@@ -437,32 +601,135 @@ function CollectionTab({ vendor, onItemClick }) {
             <p className="text-white/15 text-sm tracking-[0.3em]">no items yet</p>
           </div>
         ) : view === 'grid' ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-0.5 bg-[#0a0a0a]">
-            {items.map(item => (
-              <button
-                key={item.id}
-                onClick={() => onItemClick(item)}
-                className="relative aspect-square overflow-hidden bg-[#141414] block w-full"
-              >
-                <img
-                  src={item.image_url}
-                  alt=""
-                  className={`w-full h-full object-cover ${item.status === 'archived' ? 'opacity-30' : ''}`}
-                />
-                {item.status === 'archived' && (
-                  <div className="absolute inset-0 flex items-end justify-start p-2">
-                    <span className="bg-black/80 text-white/40 text-[9px] tracking-[0.2em] px-2 py-0.5 rounded-full">archived</span>
+          <div className="bg-[#0a0a0a]">
+            {activeCategory === 'all' ? (
+              <>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+                  <SortableContext items={activeItems.map(i => i.id)} strategy={rectSortingStrategy}>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-0.5">
+                      {activeItems.map(item => (
+                        <SortableItemCard
+                          key={item.id}
+                          item={item}
+                          isBeingDragged={activeDragId === item.id}
+                          onItemClick={onItemClick}
+                          openMenuId={openMenuId}
+                          setOpenMenuId={setOpenMenuId}
+                          handleMarkSold={handleMarkSold}
+                          handleArchive={handleArchive}
+                          handleDelete={handleDelete}
+                          actionLoading={actionLoading}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                  <DragOverlay dropAnimation={{ duration: 150, easing: 'ease' }}>
+                    {activeDragItem ? (
+                      <div
+                        className="relative aspect-square overflow-hidden bg-[#141414] shadow-2xl"
+                        style={{ transform: 'scale(1.05)' }}
+                      >
+                        <img src={activeDragItem.image_url} alt="" className="w-full h-full object-cover" draggable={false} />
+                      </div>
+                    ) : null}
+                  </DragOverlay>
+                </DndContext>
+                {soldItems.length > 0 && (
+                  <div className="opacity-70">
+                    <div className="flex items-center gap-3 px-6 py-3">
+                      <div className="flex-1 h-px bg-white/10" />
+                      <span className="text-white/25 text-[10px] tracking-[0.25em]">{soldItems.length} sold</span>
+                      <div className="flex-1 h-px bg-white/10" />
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-0.5">
+                      {soldItems.map(item => (
+                        <div key={item.id} className="relative aspect-square overflow-hidden bg-[#141414]">
+                          <button onClick={() => onItemClick(item)} className="w-full h-full block">
+                            <img src={item.image_url} alt="" className="w-full h-full object-cover" />
+                          </button>
+                          <div className="absolute inset-0 bg-black/55 pointer-events-none" />
+                          <div className="absolute top-5 left-[-32px] w-32 bg-white/90 text-[#141414] text-[10px] font-semibold tracking-[0.25em] text-center py-1.5 rotate-[-45deg] pointer-events-none z-10">
+                            SOLD
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === item.id ? null : item.id) }}
+                            className="absolute top-1.5 right-1.5 bg-black/60 rounded-full w-7 h-7 flex items-center justify-center z-10"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 12 12" fill="rgba(255,255,255,0.6)">
+                              <circle cx="6" cy="2" r="1.2" /><circle cx="6" cy="6" r="1.2" /><circle cx="6" cy="10" r="1.2" />
+                            </svg>
+                          </button>
+                          {openMenuId === item.id && (
+                            <div onClick={(e) => e.stopPropagation()} className="absolute top-10 right-1.5 bg-[#1a1a1a] border border-white/10 rounded-lg z-20 min-w-[120px] py-1 shadow-lg">
+                              <button onClick={() => handleArchive(item)} disabled={actionLoading === item.id} className="w-full text-left text-white/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 transition-colors disabled:opacity-40">Archive</button>
+                              <button onClick={() => handleDelete(item)} disabled={actionLoading === item.id} className="w-full text-left text-red-400/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 hover:text-red-400 transition-colors disabled:opacity-40">Delete</button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
-              </button>
-            ))}
+              </>
+            ) : (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-0.5">
+                {displayItems.map(item => (
+                  <div key={item.id} className="relative aspect-square overflow-hidden bg-[#141414]">
+                    <button onClick={() => onItemClick(item)} className="w-full h-full block">
+                      <img src={item.image_url} alt="" className="w-full h-full object-cover" />
+                    </button>
+                    {item.status === 'sold' && (
+                      <>
+                        <div className="absolute inset-0 bg-black/55 pointer-events-none" />
+                        <div className="absolute top-5 left-[-32px] w-32 bg-white/90 text-[#141414] text-[10px] font-semibold tracking-[0.25em] text-center py-1.5 rotate-[-45deg] pointer-events-none z-10">
+                          SOLD
+                        </div>
+                      </>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === item.id ? null : item.id) }}
+                      className="absolute top-1.5 right-1.5 bg-black/60 rounded-full w-7 h-7 flex items-center justify-center z-10"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="rgba(255,255,255,0.6)">
+                        <circle cx="6" cy="2" r="1.2" /><circle cx="6" cy="6" r="1.2" /><circle cx="6" cy="10" r="1.2" />
+                      </svg>
+                    </button>
+                    {openMenuId === item.id && (
+                      <div onClick={(e) => e.stopPropagation()} className="absolute top-10 right-1.5 bg-[#1a1a1a] border border-white/10 rounded-lg z-20 min-w-[120px] py-1 shadow-lg">
+                        {item.status === 'active' && (
+                          <button onClick={() => handleMarkSold(item)} disabled={actionLoading === item.id} className="w-full text-left text-white/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 transition-colors disabled:opacity-40">Mark as Sold</button>
+                        )}
+                        <button onClick={() => handleArchive(item)} disabled={actionLoading === item.id} className="w-full text-left text-white/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 transition-colors disabled:opacity-40">Archive</button>
+                        <button onClick={() => handleDelete(item)} disabled={actionLoading === item.id} className="w-full text-left text-red-400/60 text-[11px] tracking-[0.12em] px-3 py-2 hover:bg-white/5 hover:text-red-400 transition-colors disabled:opacity-40">Delete</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
-          <Rack items={activeItems} onItemClick={onItemClick} onActiveItemChange={() => {}} />
+          <Rack items={displayItems} onItemClick={onItemClick} onActiveItemChange={() => {}} />
         )}
       </div>
 
       <AddItemButton onClick={() => setShowAddModal(true)} />
+
+      {/* Camera input lives outside modal so it survives modal unmount/remount */}
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || [])
+          if (files.length === 0) return
+          setPendingFiles(files)
+          setShowAddModal(true)
+          requestAnimationFrame(() => { e.target.value = '' })
+        }}
+      />
 
       <AnimatePresence>
         {showAddModal && (
@@ -470,6 +737,9 @@ function CollectionTab({ vendor, onItemClick }) {
             key="add-modal"
             onClose={() => setShowAddModal(false)}
             onAdded={handleItemAdded}
+            initialFiles={pendingFiles}
+            onFilesConsumed={() => setPendingFiles(null)}
+            parentCameraRef={cameraRef}
           />
         )}
       </AnimatePresence>
@@ -483,22 +753,38 @@ function CollectionTab({ vendor, onItemClick }) {
 function ArchiveTab({ vendor, onItemClick }) {
   const [items, setItems] = useState([])
 
-  useEffect(() => {
-    const fetch = async () => {
-      const { data } = await supabase
-        .from('items')
-        .select('*')
-        .eq('vendor_id', vendor.id)
-        .eq('status', 'archived')
-        .order('created_at', { ascending: false })
-      if (data) setItems(data)
+  const fetchItems = async () => {
+    const { data } = await supabase
+      .from('items')
+      .select('*')
+      .eq('vendor_id', vendor.id)
+      .eq('status', 'archived')
+      .order('created_at', { ascending: false })
+    if (data) setItems(data)
+  }
+
+  useEffect(() => { fetchItems() }, [vendor.id])
+
+  const handleDelete = async (item) => {
+    if (item.image_url) {
+      const match = item.image_url.match(/\/item-images\/(.+)$/)
+      if (match) {
+        await supabase.storage.from('item-images').remove([match[1]])
+      }
     }
-    fetch()
-  }, [vendor.id])
+    await Promise.all([
+      supabase.from('item_ai_suggestions').delete().eq('item_id', item.id),
+      supabase.from('item_visibility_settings').delete().eq('item_id', item.id),
+      supabase.from('item_photos').delete().eq('item_id', item.id),
+      supabase.from('saves').delete().eq('item_id', item.id),
+    ])
+    await supabase.from('items').delete().eq('id', item.id)
+    await fetchItems()
+  }
 
   return (
     <div className="pb-20">
-      <ArchiveGrid items={items} onItemClick={onItemClick} />
+      <ArchiveGrid items={items} onItemClick={onItemClick} onDelete={handleDelete} />
     </div>
   )
 }
@@ -604,6 +890,8 @@ export default function VendorDashboard() {
             item={selectedItem}
             onClose={() => setSelectedItem(null)}
             onArchived={() => setSelectedItem(null)}
+            onSold={() => setSelectedItem(null)}
+            onDeleted={() => setSelectedItem(null)}
             isArchived={selectedItem.status === 'archived'}
           />
         )}

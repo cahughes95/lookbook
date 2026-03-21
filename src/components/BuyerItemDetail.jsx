@@ -97,12 +97,22 @@ export default function BuyerItemDetail({ item, onClose }) {
 
       {/* Image */}
       <div className="flex-shrink-0 flex items-center justify-center px-6 pb-4" style={{ minHeight: '45vh' }}>
-        <img
-          src={item.image_url}
-          alt={item.name || ''}
-          className="max-w-full object-contain rounded-sm"
-          style={{ maxHeight: '60vh', boxShadow: '0 8px 48px rgba(0,0,0,0.8)' }}
-        />
+        <div className="relative overflow-hidden rounded-sm" style={{ maxHeight: '60vh' }}>
+          <img
+            src={item.image_url}
+            alt={item.name || ''}
+            className="max-w-full object-contain"
+            style={{ maxHeight: '60vh', boxShadow: '0 8px 48px rgba(0,0,0,0.8)' }}
+          />
+          {item.status === 'sold' && (
+            <>
+              <div className="absolute inset-0 bg-black/55 pointer-events-none" />
+              <div className="absolute top-5 left-[-32px] w-32 bg-white/90 text-[#141414] text-[10px] font-semibold tracking-[0.25em] text-center py-1.5 rotate-[-45deg] pointer-events-none z-10">
+                SOLD
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Product details */}
@@ -162,17 +172,23 @@ export default function BuyerItemDetail({ item, onClose }) {
 
       {/* Actions */}
       <div className="flex-shrink-0 px-6 pb-4 space-y-2 mt-auto">
-        <button
-          onClick={handleSave}
-          disabled={saveLoading}
-          className={`w-full py-3.5 rounded-xl text-sm tracking-[0.15em] border transition-all ${
-            isSaved
-              ? 'bg-white/10 border-white/20 text-white/60'
-              : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20 hover:text-white/60'
-          }`}
-        >
-          {isSaved ? '♥ saved' : '♡ save'}
-        </button>
+        {item.status === 'sold' ? (
+          <div className="w-full py-3.5 rounded-xl text-sm tracking-[0.15em] border border-white/10 text-white/25 text-center">
+            sold
+          </div>
+        ) : (
+          <button
+            onClick={handleSave}
+            disabled={saveLoading}
+            className={`w-full py-3.5 rounded-xl text-sm tracking-[0.15em] border transition-all ${
+              isSaved
+                ? 'bg-white/10 border-white/20 text-white/60'
+                : 'bg-white/5 border-white/10 text-white/40 hover:border-white/20 hover:text-white/60'
+            }`}
+          >
+            {isSaved ? '♥ saved' : '♡ save'}
+          </button>
+        )}
       </div>
 
       {/* Auth modal */}

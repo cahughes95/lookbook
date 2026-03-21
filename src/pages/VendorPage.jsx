@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import Rack from '../components/Rack'
 import RackGrid from '../components/RackGrid'
 import ViewToggle from '../components/ViewToggle'
+import CategoryPills from '../components/CategoryPills'
 import BuyerItemDetail from '../components/BuyerItemDetail'
 import AuthModal from '../components/AuthModal'
 
@@ -25,6 +26,7 @@ export default function VendorPage() {
   const [isOwner, setIsOwner] = useState(false)
   const [selectedItem, setSelectedItem] = useState(null)
   const [authModal, setAuthModal] = useState(null)
+  const [soldCount, setSoldCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
 
@@ -54,10 +56,11 @@ export default function VendorPage() {
         .single()
       if (!vend || !vend.is_approved) { setNotFound(true); setLoading(false); return }
 
-      const [{ data: cols }, { count: itemCount }, { count: fCount, error: fErr }] = await Promise.all([
+      const [{ data: cols }, { count: itemCount }, { count: fCount, error: fErr }, { count: sCount }] = await Promise.all([
         supabase.from('collections').select('id, name, collection_number').eq('vendor_id', vend.id).eq('is_published', true).order('created_at', { ascending: false }),
         supabase.from('items').select('*', { count: 'exact', head: true }).eq('vendor_id', vend.id).eq('status', 'active'),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('vendor_id', vend.id),
+        supabase.from('items').select('*', { count: 'exact', head: true }).eq('vendor_id', vend.id).not('sold_at', 'is', null),
       ])
       if (fErr) console.error('Follower count error:', fErr)
 
@@ -76,22 +79,31 @@ export default function VendorPage() {
       setSelectedCollectionId(colList[0]?.id ?? null)
       setTotalCount(itemCount ?? 0)
       setFollowerCount(fCount ?? 0)
+      setSoldCount(sCount ?? 0)
       setLoading(false)
     }
     load()
   }, [handle])
 
   useEffect(() => {
-    if (!vendor || !selectedCollectionId) return
+    if (!vendor) return
     const fetchItems = async () => {
-      const { data } = await supabase
+      let query = supabase
         .from('items')
         .select('*')
         .eq('vendor_id', vendor.id)
-        .eq('status', 'active')
-        .eq('collection_id', selectedCollectionId)
-        .order('created_at', { ascending: false })
-      setItems(data ?? [])
+        .in('status', ['active', 'sold'])
+      if (selectedCollectionId) {
+        query = query.or(`collection_id.eq.${selectedCollectionId},collection_id.is.null`)
+      }
+      const { data } = await query
+        .order('position', { ascending: true, nullsFirst: false })
+      const sorted = (data ?? []).sort((a, b) => {
+        if (a.status === 'active' && b.status === 'sold') return -1
+        if (a.status === 'sold' && b.status === 'active') return 1
+        return 0
+      })
+      setItems(sorted)
       setActiveCategory('all')
     }
     fetchItems()
@@ -123,8 +135,9 @@ export default function VendorPage() {
     doFollow(user)
   }
 
-  const categories = ['all', ...Array.from(new Set(items.map(i => i.category).filter(Boolean)))]
-  const displayItems = activeCategory === 'all' ? items : items.filter(i => i.category === activeCategory)
+  const filteredItems = activeCategory === 'all' ? items : items.filter(i => i.category === activeCategory)
+  const displayActive = filteredItems.filter(i => i.status === 'active')
+  const displaySold = filteredItems.filter(i => i.status === 'sold')
   const initial = (profile?.display_name?.[0] || '?').toUpperCase()
 
   if (loading) {
@@ -155,7 +168,6 @@ export default function VendorPage() {
               dashboard &rarr;
             </Link>
           )}
-          <ViewToggle view={view} onChange={setView} />
         </div>
       </div>
 
@@ -197,6 +209,9 @@ export default function VendorPage() {
           <span className="text-white/25 text-[11px] tracking-[0.12em]">{followerCount} follower{followerCount !== 1 ? 's' : ''}</span>
           {totalCount > 0 && (
             <span className="text-white/15 text-[11px] tracking-[0.12em]">{totalCount} items</span>
+          )}
+          {soldCount > 0 && (
+            <span className="text-white/15 text-[11px] tracking-[0.12em]">{soldCount} sold</span>
           )}
         </div>
 
@@ -240,35 +255,32 @@ export default function VendorPage() {
         </div>
       )}
 
-      {/* Category pills */}
-      {categories.length > 1 && (
-        <div className="px-6 pb-4 shrink-0">
-          <div className="flex gap-2 overflow-x-auto" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
-            {categories.map(cat => (
-              <button
-                key={cat}
-                onClick={() => setActiveCategory(cat)}
-                className={`flex-shrink-0 text-[11px] tracking-[0.15em] px-3 py-1.5 rounded-full border transition-all ${
-                  activeCategory === cat
-                    ? 'border-white/30 text-white/60 bg-white/5'
-                    : 'border-white/10 text-white/25 hover:border-white/20'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
+      {/* Category pills + View toggle */}
+      <div className="px-6 pb-4 shrink-0 flex flex-col gap-3">
+        <CategoryPills items={items} activeCategory={activeCategory} onChange={setActiveCategory} />
+        <div className="flex justify-end">
+          <ViewToggle view={view} onChange={setView} />
         </div>
-      )}
+      </div>
 
       {/* Items */}
       {view === 'carousel' ? (
         <div className="shrink-0">
-          <Rack items={displayItems} onItemClick={setSelectedItem} onActiveItemChange={() => {}} />
+          <Rack items={filteredItems} onItemClick={setSelectedItem} onActiveItemChange={() => {}} />
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto min-h-0">
-          <RackGrid items={displayItems} onItemClick={setSelectedItem} />
+        <div className="flex-1 overflow-y-auto min-h-0" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <RackGrid items={displayActive} onItemClick={setSelectedItem} />
+          {displaySold.length > 0 && (
+            <div className="opacity-70">
+              <div className="flex items-center gap-3 px-6 py-3">
+                <div className="flex-1 h-px bg-white/10" />
+                <span className="text-white/25 text-[10px] tracking-[0.25em]">recently sold</span>
+                <div className="flex-1 h-px bg-white/10" />
+              </div>
+              <RackGrid items={displaySold} onItemClick={setSelectedItem} />
+            </div>
+          )}
         </div>
       )}
 

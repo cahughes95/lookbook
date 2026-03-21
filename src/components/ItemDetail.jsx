@@ -23,8 +23,9 @@ function ToggleSwitch({ enabled, onToggle }) {
 }
 
 // ─── Main component ────────────────────────────────────────────────────────────
-export default function ItemDetail({ item, onClose, onArchived, isArchived = false }) {
+export default function ItemDetail({ item, onClose, onArchived, onSold, onDeleted, isArchived = false }) {
   const [confirming, setConfirming] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -141,7 +142,42 @@ export default function ItemDetail({ item, onClose, onArchived, isArchived = fal
       setLoading(false)
       return
     }
-    onArchived()
+    onArchived?.()
+  }
+
+  const handleMarkSold = async () => {
+    setLoading(true)
+    const { error: soldError } = await supabase
+      .from('items')
+      .update({ status: 'sold', sold_at: new Date().toISOString() })
+      .eq('id', item.id)
+    if (soldError) {
+      setError(soldError.message)
+      setLoading(false)
+      return
+    }
+    onSold?.()
+  }
+
+  const handleDelete = async () => {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true)
+      return
+    }
+    setLoading(true)
+    if (item.image_url) {
+      const match = item.image_url.match(/\/item-images\/(.+)$/)
+      if (match) {
+        await supabase.storage.from('item-images').remove([match[1]])
+      }
+    }
+    const { error: delError } = await supabase.from('items').delete().eq('id', item.id)
+    if (delError) {
+      setError(delError.message)
+      setLoading(false)
+      return
+    }
+    onDeleted?.()
   }
 
   const updateEdit = (key, value) => setEditForm(f => ({ ...f, [key]: value }))
@@ -163,7 +199,7 @@ export default function ItemDetail({ item, onClose, onArchived, isArchived = fal
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-black/95 z-30 flex flex-col overflow-y-auto overflow-x-hidden"
+      className="fixed inset-0 bg-black/95 z-50 flex flex-col overflow-y-auto overflow-x-hidden"
     >
       {/* Header — edit + close side by side */}
       <div className="flex justify-end items-center gap-2 px-4 pt-4 flex-shrink-0">
@@ -348,6 +384,15 @@ export default function ItemDetail({ item, onClose, onArchived, isArchived = fal
             </button>
           ) : (
             <>
+              {item.status !== 'sold' && (
+                <button
+                  onClick={handleMarkSold}
+                  disabled={loading}
+                  className="w-full bg-white/90 hover:bg-white disabled:bg-white/20 rounded-xl py-4 text-[#141414] disabled:text-white/30 text-xs tracking-[0.2em] font-medium transition-all"
+                >
+                  {loading ? '...' : 'mark as sold'}
+                </button>
+              )}
               <button
                 onClick={handleArchive}
                 disabled={loading}
@@ -357,15 +402,30 @@ export default function ItemDetail({ item, onClose, onArchived, isArchived = fal
                     : 'bg-white/5 border border-white/10 text-white/40 hover:bg-white/8 hover:text-white/60'
                 }`}
               >
-                {loading
-                  ? 'archiving...'
-                  : confirming
-                  ? 'confirm — mark as out of stock'
-                  : 'mark as out of stock'}
+                {loading ? 'archiving...' : confirming ? 'confirm archive' : 'archive'}
               </button>
               {confirming && (
                 <button
                   onClick={() => setConfirming(false)}
+                  className="w-full py-2 text-white/25 text-xs tracking-wide"
+                >
+                  cancel
+                </button>
+              )}
+              <button
+                onClick={handleDelete}
+                disabled={loading}
+                className={`w-full py-3 rounded-xl text-xs tracking-[0.2em] transition-all duration-200 ${
+                  confirmingDelete
+                    ? 'bg-red-950/60 border border-red-700/40 text-red-400'
+                    : 'text-white/20 hover:text-red-400/50'
+                }`}
+              >
+                {loading ? '...' : confirmingDelete ? 'confirm delete' : 'delete'}
+              </button>
+              {confirmingDelete && (
+                <button
+                  onClick={() => setConfirmingDelete(false)}
                   className="w-full py-2 text-white/25 text-xs tracking-wide"
                 >
                   cancel

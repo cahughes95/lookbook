@@ -1209,6 +1209,14 @@ function SavedTab({ user, onItemClick }) {
               alt=""
               className="w-full h-full object-cover"
             />
+            {item.status === 'sold' && (
+              <>
+                <div className="absolute inset-0 bg-black/55 pointer-events-none" />
+                <div className="absolute top-3 left-[-28px] w-28 bg-white/90 text-[#141414] text-[9px] font-semibold tracking-[0.25em] text-center py-1 rotate-[-45deg] pointer-events-none z-10">
+                  SOLD
+                </div>
+              </>
+            )}
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 pt-6">
               {item.name && (
                 <p className="text-white/70 text-[10px] tracking-wide truncate">{item.name}</p>

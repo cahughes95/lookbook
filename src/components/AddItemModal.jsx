@@ -23,7 +23,7 @@ async function getAiSuggestion(imageBase64, mediaType, signal) {
 
 // ─── Compress image before sending to Groq ───────────────────────────────────
 function compressImage(file, maxWidth = 512) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
     img.onload = () => {
@@ -34,9 +34,14 @@ function compressImage(file, maxWidth = 512) {
       canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
       URL.revokeObjectURL(url)
       canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Canvas toBlob failed')); return }
         console.log(`compressed image: ${(blob.size / 1024).toFixed(1)} KB`)
         resolve(blob)
       }, 'image/jpeg', 0.7)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Failed to load image for compression'))
     }
     img.src = url
   })
@@ -80,73 +85,45 @@ function TogglePill({ label, enabled, onToggle }) {
   )
 }
 
-// ─── Tag pill (editable) ──────────────────────────────────────────────────────
+// ─── Tag list (delete only, no adding in v1) ─────────────────────────────────
 function TagList({ tags, onChange }) {
-  const [inputVal, setInputVal] = useState('')
-
   const removeTag = (tag) => onChange(tags.filter(t => t !== tag))
-
-  const addTag = (e) => {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault()
-      const val = inputVal.trim().toLowerCase().replace(/\s+/g, '-')
-      if (val && !tags.includes(val)) onChange([...tags, val])
-      setInputVal('')
-    }
-  }
-
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 flex flex-wrap gap-1.5 min-h-[44px]">
+      {tags.length === 0 && (
+        <span className="text-white/20 text-[11px] tracking-wide py-0.5">ai-generated tags will appear here</span>
+      )}
       {tags.map(tag => (
-        <span
-          key={tag}
-          className="flex items-center gap-1 bg-white/10 rounded-full px-2.5 py-0.5 text-white/60 text-[11px] tracking-wide"
-        >
+        <span key={tag} className="flex items-center gap-1 bg-white/10 rounded-full px-2.5 py-0.5 text-white/60 text-[11px] tracking-wide">
           {tag}
-          <button
-            onClick={() => removeTag(tag)}
-            className="text-white/30 hover:text-white/60 transition-colors leading-none"
-          >
-            ×
-          </button>
+          <button onClick={() => removeTag(tag)} className="text-white/30 hover:text-white/60 transition-colors leading-none">×</button>
         </span>
       ))}
-      <input
-        value={inputVal}
-        onChange={e => setInputVal(e.target.value)}
-        onKeyDown={addTag}
-        placeholder={tags.length === 0 ? 'add tags...' : ''}
-        className="bg-transparent text-white/60 text-[11px] tracking-wide focus:outline-none placeholder:text-white/20 min-w-[80px] flex-1"
-      />
     </div>
   )
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CATEGORY_OPTIONS = [
+  'tops', 'bottoms', 'outerwear', 'dresses', 'shoes',
+  'bags', 'jewelry', 'accessories', 'home', 'art', 'vintage', 'other'
+]
+
+const CONDITION_OPTIONS = ['new', 'excellent', 'good', 'fair']
+
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function AddItemModal({ onClose, onAdded }) {
-  const cameraRef = useRef(null)
+export default function AddItemModal({ onClose, onAdded, initialFiles, onFilesConsumed, parentCameraRef }) {
   const uploadRef = useRef(null)
-  const aiAbortRef = useRef(null)
+  const fallbackCameraRef = useRef(null)
+  const cameraRef = parentCameraRef || fallbackCameraRef
 
-  // step: 'pick' | 'form'
-  const [step, setStep] = useState('pick')
-  const [uploading, setUploading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [error, setError] = useState('')
+  // Queue
+  const [queue, setQueue] = useState([])
+  const [reviewingId, setReviewingId] = useState(null)
+  const [approvedCount, setApprovedCount] = useState(0)
+  const [totalCount, setTotalCount] = useState(0)
 
-  // Uploaded file state
-  const [previewUrl, setPreviewUrl] = useState(null)
-  const [storagePath, setStoragePath] = useState(null)
-  const [publicUrl, setPublicUrl] = useState(null)
-
-  // Collections
-  const [collections, setCollections] = useState([])
-  const [selectedCollectionId, setSelectedCollectionId] = useState('')
-  const [newCollectionName, setNewCollectionName] = useState('')
-  const [showNewCollection, setShowNewCollection] = useState(false)
-
-  // Vendor feature flags — controls which optional fields are shown
+  // Shared state
   const [featureFlags, setFeatureFlags] = useState({
     show_condition_field: false,
     show_brand_field: false,
@@ -156,25 +133,6 @@ export default function AddItemModal({ onClose, onAdded }) {
     show_material_field: false,
     show_tags_field: false,
   })
-
-  // Product form — core fields always shown
-  const [form, setForm] = useState({
-    name: '',
-    description: '',
-    size: '',
-    price: '',
-    // Optional fields — populated by AI in background, shown if flag enabled
-    category: '',
-    tags: [],
-    brand: '',
-    era: '',
-    color: '',
-    condition: '',
-    material: '',
-    measurements: '',
-  })
-
-  // Visibility toggles (what buyers see)
   const [visibility, setVisibility] = useState({
     show_name: true,
     show_description: true,
@@ -189,26 +147,18 @@ export default function AddItemModal({ onClose, onAdded }) {
     show_material: true,
     show_tags: true,
   })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
-  // AI suggestion tracking
-  const [aiSuggestion, setAiSuggestion] = useState(null)
-
-  // Exit animation control
+  // Exit animation
   const [isVisible, setIsVisible] = useState(true)
   const onExitRef = useRef(null)
-
-  const handleClose = () => {
-    if (uploading || saving) return
-    onExitRef.current = onClose
-    setIsVisible(false)
-  }
 
   // Load collections and vendor feature flags on mount
   useEffect(() => {
     const loadData = async () => {
       const { data: { user } } = await supabase.auth.getUser()
 
-      // Look up vendor id first
       const { data: vendor } = await supabase
         .from('vendors')
         .select('id')
@@ -216,15 +166,6 @@ export default function AddItemModal({ onClose, onAdded }) {
         .single()
       if (!vendor) return
 
-      // Load vendor's collections
-      const { data: cols } = await supabase
-        .from('collections')
-        .select('id, name, collection_number')
-        .eq('vendor_id', vendor.id)
-        .order('created_at', { ascending: false })
-      if (cols) setCollections(cols)
-
-      // Load vendor feature flags
       const { data: flags } = await supabase
         .from('vendor_feature_flags')
         .select('*')
@@ -235,212 +176,233 @@ export default function AddItemModal({ onClose, onAdded }) {
     loadData()
   }, [])
 
-  const handleFile = async (file) => {
-    if (!file) return
-    setUploading(true)
-    setError('')
+  // Process initial files passed from parent (e.g. camera capture)
+  // Must watch initialFiles so camera-from-inside-modal works (modal already mounted)
+  useEffect(() => {
+    if (initialFiles && initialFiles.length > 0) {
+      ingestFiles(initialFiles)
+      onFilesConsumed?.()
+    }
+  }, [initialFiles])
 
+  // ─── Queue helpers ────────────────────────────────────────────────────────
+  const updateQueueItem = (id, updates) => {
+    setQueue(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item))
+  }
+
+  const processItem = async (queueItem) => {
+    const id = queueItem.id
     try {
       const { data: { user } } = await supabase.auth.getUser()
-
-      setPreviewUrl(URL.createObjectURL(file))
-
+      const file = queueItem.file
       const ext = file.name.split('.').pop() || 'jpg'
       const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
 
-      const { error: uploadError } = await supabase.storage
-        .from('item-images')
-        .upload(path, file)
+      const { error: uploadError } = await supabase.storage.from('item-images').upload(path, file)
       if (uploadError) throw uploadError
 
-      const { data: { publicUrl: url } } = supabase.storage
-        .from('item-images')
-        .getPublicUrl(path)
+      const { data: { publicUrl: url } } = supabase.storage.from('item-images').getPublicUrl(path)
 
-      setStoragePath(path)
-      setPublicUrl(url)
-      setStep('form')
-      setUploading(false)
+      setQueue(prev => prev.map(i => i.id === id ? { ...i, storagePath: path, publicUrl: url, status: 'analyzing' } : i))
 
-      // Fire AI suggestion in parallel — populates all fields including new ones
-      aiAbortRef.current?.abort()
-      const controller = new AbortController()
-      aiAbortRef.current = controller
-      setAiLoading(true)
-      try {
-        const compressed = await compressImage(file)
-        const base64 = await blobToBase64(compressed)
-        const suggestion = await getAiSuggestion(base64, 'image/jpeg', controller.signal)
-        setAiSuggestion(suggestion)
-        // Populate all fields from AI — optional ones stored silently even if not shown
-        setForm(f => ({
-          ...f,
+      const compressed = await compressImage(file)
+      const base64 = await blobToBase64(compressed)
+      const suggestion = await getAiSuggestion(base64, 'image/jpeg')
+
+      setQueue(prev => prev.map(i => i.id === id ? {
+        ...i,
+        status: 'ready',
+        aiSuggestion: suggestion,
+        form: {
           name: suggestion.name || '',
           description: suggestion.description || '',
           size: suggestion.suggested_size || '',
+          price: '',
           category: suggestion.category || '',
           tags: Array.isArray(suggestion.tags) ? suggestion.tags : [],
           brand: suggestion.brand || '',
           era: suggestion.era || '',
           color: suggestion.color || '',
           condition: suggestion.condition || '',
-        }))
-      } catch (aiErr) {
-        if (aiErr.name !== 'AbortError') {
-          console.warn('AI suggestion failed silently:', aiErr)
-        }
-      } finally {
-        setAiLoading(false)
-      }
+          material: '',
+          measurements: '',
+        },
+      } : i))
     } catch (err) {
-      setError(err.message)
-      setUploading(false)
+      setQueue(prev => prev.map(i => i.id === id ? { ...i, status: 'error', error: err.message } : i))
     }
   }
 
-  const handleSave = async () => {
-    if (!selectedCollectionId && !newCollectionName.trim()) {
-      setError(showNewCollection ? 'Enter a collection name' : 'Select a collection')
-      return
+  const retryItem = (queueItem) => {
+    updateQueueItem(queueItem.id, { status: 'uploading', error: null })
+    processItem(queueItem)
+  }
+
+  // ─── File handling ────────────────────────────────────────────────────────
+  const ingestFiles = (files) => {
+    if (files.length === 0) return
+
+    const newItems = files.map(file => ({
+      id: self.crypto?.randomUUID?.() || (Date.now().toString(36) + Math.random().toString(36).slice(2)),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: 'uploading',
+      error: null,
+      storagePath: null,
+      publicUrl: null,
+      aiSuggestion: null,
+      form: { name: '', description: '', size: '', price: '', category: '', tags: [], brand: '', era: '', color: '', condition: '', material: '', measurements: '' },
+    }))
+
+    setQueue(prev => [...prev, ...newItems])
+    setTotalCount(prev => prev + files.length)
+
+    // Single photo (camera): go straight to review
+    if (files.length === 1) {
+      setReviewingId(newItems[0].id)
     }
+
+    newItems.forEach(item => processItem(item))
+  }
+
+  const handleFiles = (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+    ingestFiles(files)
+    // Reset file input AFTER reading files — deferred so mobile camera
+    // doesn't invalidate the file reference mid-read
+    const input = e.target
+    requestAnimationFrame(() => { input.value = '' })
+  }
+
+  // ─── Form field helpers ───────────────────────────────────────────────────
+  const reviewItem = queue.find(i => i.id === reviewingId)
+
+  const updateItemField = (key, value) => {
+    const item = queue.find(i => i.id === reviewingId)
+    if (!item) return
+    updateQueueItem(reviewingId, {
+      form: { ...item.form, [key]: value }
+    })
+  }
+
+  const toggleVisibility = (key) => setVisibility(v => ({ ...v, [key]: !v[key] }))
+
+  // ─── Approve handler ─────────────────────────────────────────────────────
+  const handleApprove = async () => {
+    const item = queue.find(i => i.id === reviewingId)
+    if (!item) return
     setSaving(true)
     setError('')
 
     try {
       const { data: { user } } = await supabase.auth.getUser()
-
-      // Get vendor id
-      const { data: vendor } = await supabase
-        .from('vendors')
-        .select('id')
-        .eq('profile_id', user.id)
-        .single()
+      const { data: vendor } = await supabase.from('vendors').select('id').eq('profile_id', user.id).single()
       if (!vendor) throw new Error('Vendor profile not found')
 
-      let collectionId = selectedCollectionId
-
-      // Create new collection if needed
-      if (showNewCollection && newCollectionName.trim()) {
-        const nextNum = collections.reduce((m, c) => Math.max(m, c.collection_number ?? 0), 0) + 1
-        const { data: newCol, error: colErr } = await supabase
-          .from('collections')
-          .insert({
-            vendor_id: vendor.id,
-            name: newCollectionName.trim(),
-            is_published: true,
-            collection_number: nextNum,
-          })
-          .select('id')
-          .single()
-        if (colErr) throw colErr
-        collectionId = newCol.id
-      }
-
-      // Insert item — all AI fields saved regardless of whether they were shown
-      const { data: item, error: itemErr } = await supabase
+      const { data: dbItem, error: itemErr } = await supabase
         .from('items')
         .insert({
           vendor_id: vendor.id,
-          collection_id: collectionId,
-          image_url: publicUrl,
-          name: form.name || null,
-          description: form.description || null,
-          size: form.size || null,
-          price: form.price ? parseFloat(form.price) : null,
+          collection_id: null,
+          image_url: item.publicUrl,
+          name: item.form.name || null,
+          description: item.form.description || null,
+          size: item.form.size || null,
+          price: item.form.price ? parseFloat(item.form.price) : null,
           status: 'active',
-          // AI-populated fields — always saved even if not shown in form
-          category: form.category || null,
-          tags: form.tags.length > 0 ? form.tags : [],
-          brand: form.brand || null,
-          era: form.era || null,
-          color: form.color || null,
-          condition: form.condition || null,
-          material: form.material || null,
-          measurements: form.measurements || null,
-          category_reviewed: !!aiSuggestion,
-          category_model: aiSuggestion ? 'llama-4-scout-17b-16e-instruct' : null,
+          category: item.form.category || null,
+          tags: item.form.tags.length > 0 ? item.form.tags : [],
+          brand: item.form.brand || null,
+          era: item.form.era || null,
+          color: item.form.color || null,
+          condition: item.form.condition || null,
+          material: item.form.material || null,
+          measurements: item.form.measurements || null,
+          category_reviewed: !!item.aiSuggestion,
+          category_model: item.aiSuggestion ? 'llama-4-scout-17b-16e-instruct' : null,
         })
         .select('id')
         .single()
       if (itemErr) throw itemErr
 
-      // Insert primary photo record
       const { data: photo, error: photoErr } = await supabase
         .from('item_photos')
         .insert({
-          item_id: item.id,
-          storage_path: storagePath,
+          item_id: dbItem.id,
+          storage_path: item.storagePath,
           is_primary: true,
           sort_order: 0,
-          ai_analyzed: !!aiSuggestion,
+          ai_analyzed: !!item.aiSuggestion,
         })
         .select('id')
         .single()
       if (photoErr) throw photoErr
 
-      // Insert visibility settings
-      await supabase.from('item_visibility_settings').insert({
-        item_id: item.id,
-        ...visibility,
-      })
+      await supabase.from('item_visibility_settings').insert({ item_id: dbItem.id, ...visibility })
 
-      // Track full AI suggestion for prompt quality analysis
-      if (aiSuggestion) {
+      if (item.aiSuggestion) {
         await supabase.from('item_ai_suggestions').insert({
-          item_id: item.id,
+          item_id: dbItem.id,
           photo_id: photo.id,
-          suggested_name: aiSuggestion.name,
-          suggested_description: aiSuggestion.description,
-          suggested_size: aiSuggestion.suggested_size,
-          suggested_category: aiSuggestion.category || null,
-          suggested_tags: Array.isArray(aiSuggestion.tags) ? aiSuggestion.tags : [],
-          suggested_brand: aiSuggestion.brand || null,
-          suggested_era: aiSuggestion.era || null,
-          suggested_color: aiSuggestion.color || null,
-          suggested_condition: aiSuggestion.condition || null,
+          suggested_name: item.aiSuggestion.name,
+          suggested_description: item.aiSuggestion.description,
+          suggested_size: item.aiSuggestion.suggested_size,
+          suggested_category: item.aiSuggestion.category || null,
+          suggested_tags: Array.isArray(item.aiSuggestion.tags) ? item.aiSuggestion.tags : [],
+          suggested_brand: item.aiSuggestion.brand || null,
+          suggested_era: item.aiSuggestion.era || null,
+          suggested_color: item.aiSuggestion.color || null,
+          suggested_condition: item.aiSuggestion.condition || null,
           model_used: 'llama-4-scout-17b-16e-instruct',
-          accepted_name: form.name === aiSuggestion.name,
-          accepted_description: form.description === aiSuggestion.description,
-          accepted_category: form.category === aiSuggestion.category,
-          accepted_tags: JSON.stringify(form.tags) === JSON.stringify(aiSuggestion.tags),
+          accepted_name: item.form.name === item.aiSuggestion.name,
+          accepted_description: item.form.description === item.aiSuggestion.description,
+          accepted_category: item.form.category === item.aiSuggestion.category,
+          accepted_tags: JSON.stringify(item.form.tags) === JSON.stringify(item.aiSuggestion.tags),
         })
       }
 
-      onExitRef.current = onAdded
-      setIsVisible(false)
+      setApprovedCount(prev => prev + 1)
+      const remaining = queue.filter(i => i.id !== reviewingId)
+      setQueue(remaining)
+
+      const nextReady = remaining.find(i => i.status === 'ready')
+      if (nextReady) {
+        setReviewingId(nextReady.id)
+      } else if (remaining.length === 0) {
+        onExitRef.current = onAdded
+        setIsVisible(false)
+      } else {
+        setReviewingId(null)
+      }
     } catch (err) {
       setError(err.message)
+    } finally {
       setSaving(false)
     }
   }
 
-  const updateField = (key, value) => setForm(f => ({ ...f, [key]: value }))
-  const toggleVisibility = (key) => setVisibility(v => ({ ...v, [key]: !v[key] }))
+  // ─── Close with warning ───────────────────────────────────────────────────
+  const handleClose = () => {
+    if (saving) return
+    if (queue.length > 0) {
+      if (!window.confirm('You have unapproved items. They will be lost if you close.')) return
+    }
+    onExitRef.current = onClose
+    setIsVisible(false)
+  }
 
-  const CATEGORY_OPTIONS = [
-    'tops', 'bottoms', 'outerwear', 'dresses', 'shoes',
-    'bags', 'jewelry', 'accessories', 'home', 'art', 'vintage', 'other'
-  ]
-
-  const CONDITION_OPTIONS = ['new', 'excellent', 'good', 'fair']
-
+  // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Hidden inputs */}
-      <input
-        ref={cameraRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        onChange={e => handleFile(e.target.files?.[0])}
-      />
+      {/* Hidden upload input — camera input lives in parent to survive modal lifecycle */}
       <input
         ref={uploadRef}
         type="file"
         accept="image/*"
+        multiple
         className="hidden"
-        onChange={e => handleFile(e.target.files?.[0])}
+        onChange={handleFiles}
       />
 
       <AnimatePresence onExitComplete={() => onExitRef.current?.()}>
@@ -452,7 +414,7 @@ export default function AddItemModal({ onClose, onAdded }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={handleClose}
-            className="fixed inset-0 bg-black/70 z-30"
+            className="fixed inset-0 bg-black/70 z-50"
           />
         )}
 
@@ -464,191 +426,116 @@ export default function AddItemModal({ onClose, onAdded }) {
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: 'spring', damping: 32, stiffness: 320 }}
-            className="fixed bottom-0 left-0 right-0 bg-[#141414] rounded-t-2xl z-40 max-h-[92vh] overflow-y-auto"
+            className="fixed bottom-0 left-0 right-0 bg-[#141414] rounded-t-2xl z-50 max-h-[92vh] overflow-y-auto"
             style={{ paddingBottom: 'env(safe-area-inset-bottom, 24px)' }}
           >
             <div className="px-6 pt-4 pb-6">
               {/* Drag handle */}
               <div className="w-10 h-1 bg-white/15 rounded-full mx-auto mb-5" />
 
-              {/* ── STEP 1: Pick photo ── */}
-              {step === 'pick' && (
+              {/* ── PICK step — no items in queue, not reviewing ── */}
+              {queue.length === 0 && !reviewingId ? (
                 <>
                   <p className="text-white/35 text-xs tracking-[0.25em] text-center mb-5">
                     add to rack
                   </p>
-                  {error && (
-                    <p className="text-red-400 text-xs text-center mb-4 tracking-wide">{error}</p>
-                  )}
-                  {uploading ? (
-                    <div className="py-6 text-center">
-                      <p className="text-white/40 text-sm tracking-widest">uploading...</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <button
-                        onClick={() => cameraRef.current?.click()}
-                        className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl py-4 text-white/80 text-sm tracking-[0.15em] transition-colors"
-                      >
-                        take photo
-                      </button>
-                      <button
-                        onClick={() => uploadRef.current?.click()}
-                        className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl py-4 text-white/80 text-sm tracking-[0.15em] transition-colors"
-                      >
-                        upload image
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* ── STEP 2: Product form ── */}
-              {step === 'form' && (
-                <>
-                  {/* Header */}
-                  <div className="flex items-center justify-between mb-5">
+                  <div className="space-y-3">
                     <button
-                      onClick={() => {
-                        aiAbortRef.current?.abort()
-                        setStep('pick')
-                        setAiLoading(false)
-                        setAiSuggestion(null)
-                        setForm({
-                          name: '', description: '', size: '', price: '',
-                          category: '', tags: [], brand: '', era: '',
-                          color: '', condition: '', material: '', measurements: '',
-                        })
-                      }}
-                      className="text-white/30 text-xs tracking-[0.15em] hover:text-white/60 transition-colors"
+                      onClick={() => cameraRef.current?.click()}
+                      className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl py-4 text-white/80 text-sm tracking-[0.15em] transition-colors"
                     >
-                      ← back
+                      take photo
                     </button>
-                    <p className="text-white/35 text-xs tracking-[0.25em]">new item</p>
-                    <div className="w-10" />
+                    <button
+                      onClick={() => uploadRef.current?.click()}
+                      className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl py-4 text-white/80 text-sm tracking-[0.15em] transition-colors"
+                    >
+                      upload images
+                    </button>
+                  </div>
+                </>
+
+              ) : reviewingId && reviewItem ? (
+                /* ── REVIEW step ── */
+                <>
+                  <div className="flex items-center justify-between mb-5">
+                    {queue.length > 1 ? (
+                      <button
+                        onClick={() => setReviewingId(null)}
+                        className="text-white/30 text-xs tracking-[0.15em] hover:text-white/60 transition-colors"
+                      >
+                        ← queue
+                      </button>
+                    ) : (
+                      <div className="w-10" />
+                    )}
+                    <p className="text-white/35 text-xs tracking-[0.25em]">{queue.length > 1 ? 'review item' : 'new item'}</p>
+                    {totalCount > 1 ? (
+                      <p className="text-white/25 text-[10px] tracking-[0.15em]">{approvedCount} of {totalCount}</p>
+                    ) : (
+                      <div className="w-10" />
+                    )}
                   </div>
 
-                  {error && (
-                    <p className="text-red-400 text-xs text-center mb-4 tracking-wide">{error}</p>
-                  )}
+                  {error && <p className="text-red-400 text-xs text-center mb-4 tracking-wide">{error}</p>}
 
-                  {/* Preview + AI badge */}
+                  {/* Preview image — prefer publicUrl (survives tab suspension) over blob previewUrl */}
                   <div className="relative mb-5">
-                    <img
-                      src={previewUrl}
-                      alt="item preview"
-                      className="w-full h-48 object-cover rounded-xl"
-                    />
-                    {aiLoading && (
+                    <img src={reviewItem.publicUrl || reviewItem.previewUrl} alt="item preview" className="w-full h-48 object-cover rounded-xl" />
+                    {(reviewItem.status === 'uploading' || reviewItem.status === 'analyzing') && (
                       <div className="absolute bottom-2 left-2 bg-black/70 rounded-full px-3 py-1 flex items-center gap-1.5">
                         <motion.div
                           className="w-1.5 h-1.5 rounded-full bg-white/60"
                           animate={{ opacity: [0.3, 1, 0.3] }}
                           transition={{ duration: 1.2, repeat: Infinity }}
                         />
-                        <span className="text-white/50 text-[10px] tracking-widest">analyzing...</span>
+                        <span className="text-white/50 text-[10px] tracking-widest">
+                          {reviewItem.status === 'uploading' ? 'uploading...' : 'analyzing...'}
+                        </span>
                       </div>
                     )}
-                    {!aiLoading && aiSuggestion && (
+                    {reviewItem.status === 'ready' && reviewItem.aiSuggestion && (
                       <div className="absolute bottom-2 left-2 bg-black/70 rounded-full px-3 py-1">
-                        <span className="text-white/40 text-[10px] tracking-widest">✦ ai filled</span>
+                        <span className="text-white/40 text-[10px] tracking-widest">&#10022; ai filled</span>
+                      </div>
+                    )}
+                    {reviewItem.status === 'error' && (
+                      <div className="absolute bottom-2 left-2 bg-black/70 rounded-full px-3 py-1 flex items-center gap-1.5">
+                        <span className="text-red-400/70 text-[10px] tracking-widest">failed</span>
+                        <button onClick={() => retryItem(reviewItem)} className="text-white/40 text-[10px] tracking-wide underline">retry</button>
                       </div>
                     )}
                   </div>
 
-                  {/* Collection picker */}
-                  <div className="mb-4">
-                    <p className="text-white/30 text-[10px] tracking-[0.2em] mb-2">collection</p>
-                    {!showNewCollection ? (
-                      <div className="flex gap-2">
-                        <select
-                          value={selectedCollectionId}
-                          onChange={e => setSelectedCollectionId(e.target.value)}
-                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide appearance-none focus:outline-none focus:border-white/25"
-                        >
-                          <option value="">select collection...</option>
-                          {collections.map(c => (
-                            <option key={c.id} value={c.id}>
-                              {c.collection_number ? `#${c.collection_number} — ` : ''}{c.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => {
-                            const maxNum = collections.reduce((m, c) => Math.max(m, c.collection_number ?? 0), 0)
-                            const next = String(maxNum + 1).padStart(2, '0')
-                            setShowNewCollection(true)
-                            setSelectedCollectionId('')
-                            setNewCollectionName(`Collection ${next}`)
-                          }}
-                          className="bg-white/5 border border-white/10 rounded-xl px-4 text-white/40 text-xs tracking-widest hover:bg-white/10 transition-colors"
-                        >
-                          + new
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex gap-2">
-                        <input
-                          value={newCollectionName}
-                          onChange={e => setNewCollectionName(e.target.value)}
-                          placeholder="collection name..."
-                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
-                        />
-                        <button
-                          onClick={() => { setShowNewCollection(false); setNewCollectionName('') }}
-                          className="bg-white/5 border border-white/10 rounded-xl px-4 text-white/40 text-xs tracking-widest hover:bg-white/10 transition-colors"
-                        >
-                          cancel
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* ── CORE FIELDS (always shown) ── */}
+                  {/* ── CORE FIELDS ── */}
 
                   {/* Name */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-white/30 text-[10px] tracking-[0.2em]">name</p>
-                      <TogglePill
-                        label="visible"
-                        enabled={visibility.show_name}
-                        onToggle={() => toggleVisibility('show_name')}
-                      />
+                      <TogglePill label="visible" enabled={visibility.show_name} onToggle={() => toggleVisibility('show_name')} />
                     </div>
-                    {aiLoading ? (
-                      <Shimmer className="h-12" />
-                    ) : (
-                      <input
-                        value={form.name}
-                        onChange={e => updateField('name', e.target.value)}
-                        placeholder="item name..."
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
-                      />
-                    )}
+                    <input
+                      value={reviewItem.form.name}
+                      onChange={e => updateItemField('name', e.target.value)}
+                      placeholder="item name..."
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
+                    />
                   </div>
 
                   {/* Description */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-white/30 text-[10px] tracking-[0.2em]">description</p>
-                      <TogglePill
-                        label="visible"
-                        enabled={visibility.show_description}
-                        onToggle={() => toggleVisibility('show_description')}
-                      />
+                      <TogglePill label="visible" enabled={visibility.show_description} onToggle={() => toggleVisibility('show_description')} />
                     </div>
-                    {aiLoading ? (
-                      <Shimmer className="h-20" />
-                    ) : (
-                      <textarea
-                        value={form.description}
-                        onChange={e => updateField('description', e.target.value)}
-                        placeholder="describe the item..."
-                        rows={3}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20 resize-none"
-                      />
-                    )}
+                    <textarea
+                      value={reviewItem.form.description}
+                      onChange={e => updateItemField('description', e.target.value)}
+                      placeholder="describe the item..."
+                      rows={3}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20 resize-none"
+                    />
                   </div>
 
                   {/* Size + Price */}
@@ -656,35 +543,23 @@ export default function AddItemModal({ onClose, onAdded }) {
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">size</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_size}
-                          onToggle={() => toggleVisibility('show_size')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_size} onToggle={() => toggleVisibility('show_size')} />
                       </div>
-                      {aiLoading ? (
-                        <Shimmer className="h-12" />
-                      ) : (
-                        <input
-                          value={form.size}
-                          onChange={e => updateField('size', e.target.value)}
-                          placeholder="M, 32x30..."
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
-                        />
-                      )}
+                      <input
+                        value={reviewItem.form.size}
+                        onChange={e => updateItemField('size', e.target.value)}
+                        placeholder="M, 32x30..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
+                      />
                     </div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">price</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_price}
-                          onToggle={() => toggleVisibility('show_price')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_price} onToggle={() => toggleVisibility('show_price')} />
                       </div>
                       <input
-                        value={form.price}
-                        onChange={e => updateField('price', e.target.value)}
+                        value={reviewItem.form.price}
+                        onChange={e => updateItemField('price', e.target.value)}
                         placeholder="0.00"
                         type="number"
                         min="0"
@@ -694,202 +569,227 @@ export default function AddItemModal({ onClose, onAdded }) {
                     </div>
                   </div>
 
-                  {/* Category — always shown, AI picks it */}
+                  {/* Category */}
                   <div className="mb-4">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-white/30 text-[10px] tracking-[0.2em]">category</p>
                     </div>
-                    {aiLoading ? (
-                      <Shimmer className="h-12" />
-                    ) : (
-                      <select
-                        value={form.category}
-                        onChange={e => updateField('category', e.target.value)}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide appearance-none focus:outline-none focus:border-white/25"
-                      >
-                        <option value="">select category...</option>
-                        {CATEGORY_OPTIONS.map(cat => (
-                          <option key={cat} value={cat}>{cat}</option>
-                        ))}
-                      </select>
-                    )}
+                    <select
+                      value={reviewItem.form.category}
+                      onChange={e => updateItemField('category', e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide appearance-none focus:outline-none focus:border-white/25"
+                    >
+                      <option value="">select category...</option>
+                      {CATEGORY_OPTIONS.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
                   </div>
 
-                  {/* ── OPTIONAL FIELDS (shown based on vendor feature flags) ── */}
+                  {/* ── OPTIONAL FIELDS (gated by feature flags) ── */}
 
-                  {/* Tags — shown if flag enabled */}
+                  {/* Tags */}
                   {featureFlags.show_tags_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">tags</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_tags}
-                          onToggle={() => toggleVisibility('show_tags')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_tags} onToggle={() => toggleVisibility('show_tags')} />
                       </div>
-                      {aiLoading ? (
-                        <Shimmer className="h-12" />
-                      ) : (
-                        <TagList
-                          tags={form.tags}
-                          onChange={tags => updateField('tags', tags)}
-                        />
-                      )}
-                      <p className="text-white/20 text-[10px] tracking-wide mt-1.5">
-                        press enter or comma to add a tag
-                      </p>
+                      <TagList
+                        tags={reviewItem.form.tags}
+                        onChange={tags => updateItemField('tags', tags)}
+                      />
                     </div>
                   )}
 
-                  {/* Brand — shown if flag enabled */}
+                  {/* Brand */}
                   {featureFlags.show_brand_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">brand</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_brand}
-                          onToggle={() => toggleVisibility('show_brand')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_brand} onToggle={() => toggleVisibility('show_brand')} />
                       </div>
-                      {aiLoading ? (
-                        <Shimmer className="h-12" />
-                      ) : (
-                        <input
-                          value={form.brand}
-                          onChange={e => updateField('brand', e.target.value)}
-                          placeholder="brand name..."
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
-                        />
-                      )}
+                      <input
+                        value={reviewItem.form.brand}
+                        onChange={e => updateItemField('brand', e.target.value)}
+                        placeholder="brand name..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
+                      />
                     </div>
                   )}
 
-                  {/* Era — shown if flag enabled */}
+                  {/* Era */}
                   {featureFlags.show_era_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">era</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_era}
-                          onToggle={() => toggleVisibility('show_era')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_era} onToggle={() => toggleVisibility('show_era')} />
                       </div>
-                      {aiLoading ? (
-                        <Shimmer className="h-12" />
-                      ) : (
-                        <input
-                          value={form.era}
-                          onChange={e => updateField('era', e.target.value)}
-                          placeholder="1970s, Y2K, Victorian..."
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
-                        />
-                      )}
+                      <input
+                        value={reviewItem.form.era}
+                        onChange={e => updateItemField('era', e.target.value)}
+                        placeholder="1970s, Y2K, Victorian..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
+                      />
                     </div>
                   )}
 
-                  {/* Condition — shown if flag enabled */}
+                  {/* Condition */}
                   {featureFlags.show_condition_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">condition</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_condition}
-                          onToggle={() => toggleVisibility('show_condition')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_condition} onToggle={() => toggleVisibility('show_condition')} />
                       </div>
-                      {aiLoading ? (
-                        <Shimmer className="h-12" />
-                      ) : (
-                        <select
-                          value={form.condition}
-                          onChange={e => updateField('condition', e.target.value)}
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide appearance-none focus:outline-none focus:border-white/25"
-                        >
-                          <option value="">select condition...</option>
-                          {CONDITION_OPTIONS.map(c => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      )}
+                      <select
+                        value={reviewItem.form.condition}
+                        onChange={e => updateItemField('condition', e.target.value)}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide appearance-none focus:outline-none focus:border-white/25"
+                      >
+                        <option value="">select condition...</option>
+                        {CONDITION_OPTIONS.map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
                     </div>
                   )}
 
-                  {/* Color — shown if flag enabled */}
+                  {/* Color */}
                   {featureFlags.show_color_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">color</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_color}
-                          onToggle={() => toggleVisibility('show_color')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_color} onToggle={() => toggleVisibility('show_color')} />
                       </div>
-                      {aiLoading ? (
-                        <Shimmer className="h-12" />
-                      ) : (
-                        <input
-                          value={form.color}
-                          onChange={e => updateField('color', e.target.value)}
-                          placeholder="indigo, cream, olive green..."
-                          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
-                        />
-                      )}
+                      <input
+                        value={reviewItem.form.color}
+                        onChange={e => updateItemField('color', e.target.value)}
+                        placeholder="indigo, cream, olive green..."
+                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
+                      />
                     </div>
                   )}
 
-                  {/* Material — shown if flag enabled */}
+                  {/* Material */}
                   {featureFlags.show_material_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">material</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_material}
-                          onToggle={() => toggleVisibility('show_material')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_material} onToggle={() => toggleVisibility('show_material')} />
                       </div>
                       <input
-                        value={form.material}
-                        onChange={e => updateField('material', e.target.value)}
+                        value={reviewItem.form.material}
+                        onChange={e => updateItemField('material', e.target.value)}
                         placeholder="denim, linen, leather..."
                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
                       />
                     </div>
                   )}
 
-                  {/* Measurements — shown if flag enabled */}
+                  {/* Measurements */}
                   {featureFlags.show_measurements_field && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-white/30 text-[10px] tracking-[0.2em]">measurements</p>
-                        <TogglePill
-                          label="visible"
-                          enabled={visibility.show_measurements}
-                          onToggle={() => toggleVisibility('show_measurements')}
-                        />
+                        <TogglePill label="visible" enabled={visibility.show_measurements} onToggle={() => toggleVisibility('show_measurements')} />
                       </div>
                       <input
-                        value={form.measurements}
-                        onChange={e => updateField('measurements', e.target.value)}
+                        value={reviewItem.form.measurements}
+                        onChange={e => updateItemField('measurements', e.target.value)}
                         placeholder="chest 18in, length 26in..."
                         className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white/70 text-sm tracking-wide focus:outline-none focus:border-white/25 placeholder:text-white/20"
                       />
                     </div>
                   )}
 
-                  {/* Save button */}
+                  {/* Approve button */}
                   <button
-                    onClick={handleSave}
+                    onClick={handleApprove}
                     disabled={saving}
                     className="w-full bg-white/90 hover:bg-white disabled:bg-white/20 rounded-xl py-4 text-[#141414] disabled:text-white/30 text-sm tracking-[0.2em] font-medium transition-all mt-2"
                   >
-                    {saving ? 'saving...' : 'add to rack'}
+                    {saving ? 'saving...' : 'approve'}
                   </button>
+
+                  {/* Discard item */}
+                  <button
+                    onClick={() => {
+                      const remaining = queue.filter(i => i.id !== reviewingId)
+                      setQueue(remaining)
+                      const nextReady = remaining.find(i => i.status === 'ready')
+                      setReviewingId(nextReady?.id || null)
+                    }}
+                    className="w-full py-2 mt-1 text-white/20 text-xs tracking-[0.15em] hover:text-white/40 transition-colors"
+                  >
+                    discard item
+                  </button>
+                </>
+
+              ) : (
+                /* ── QUEUE step — thumbnails and progress ── */
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <p className="text-white/35 text-xs tracking-[0.25em]">upload queue</p>
+                    <p className="text-white/25 text-[10px] tracking-[0.15em]">{approvedCount} of {totalCount} approved</p>
+                  </div>
+
+                  {error && <p className="text-red-400 text-xs text-center mb-4 tracking-wide">{error}</p>}
+
+                  {/* Thumbnail grid */}
+                  <div className="grid grid-cols-3 gap-1.5 mb-4">
+                    {queue.map(item => (
+                      <button
+                        key={item.id}
+                        onClick={() => item.status === 'ready' && setReviewingId(item.id)}
+                        disabled={item.status !== 'ready'}
+                        className="relative aspect-square rounded-lg overflow-hidden bg-[#141414]"
+                      >
+                        <img src={item.publicUrl || item.previewUrl} alt="" className="w-full h-full object-cover" />
+                        {item.status === 'uploading' && (
+                          <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                            <span className="text-white/50 text-[10px] tracking-widest">uploading...</span>
+                          </div>
+                        )}
+                        {item.status === 'analyzing' && (
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                            <motion.div className="w-1.5 h-1.5 rounded-full bg-white/60" animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 1.2, repeat: Infinity }} />
+                          </div>
+                        )}
+                        {item.status === 'ready' && (
+                          <div className="absolute top-1.5 right-1.5 w-3 h-3 rounded-full bg-green-500/80" />
+                        )}
+                        {item.status === 'error' && (
+                          <div className="absolute inset-0 bg-red-950/50 flex flex-col items-center justify-center gap-1">
+                            <span className="text-red-400/70 text-[10px] tracking-wide">failed</span>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); retryItem(item) }}
+                              className="text-white/40 text-[10px] tracking-wide underline"
+                            >
+                              retry
+                            </button>
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Add more button */}
+                  <button
+                    onClick={() => uploadRef.current?.click()}
+                    className="w-full bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl py-3 text-white/40 text-xs tracking-[0.15em] transition-colors"
+                  >
+                    + add more images
+                  </button>
+
+                  {/* Done button — when only errors remain */}
+                  {queue.every(i => i.status === 'error') && queue.length > 0 && (
+                    <button
+                      onClick={handleClose}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl py-3 text-white/40 text-xs tracking-[0.15em] mt-2 transition-colors"
+                    >
+                      done
+                    </button>
+                  )}
                 </>
               )}
             </div>

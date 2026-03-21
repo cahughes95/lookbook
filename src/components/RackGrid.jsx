@@ -13,13 +13,22 @@ export default function RackGrid({ items, onItemClick }) {
         <button
           key={item.id}
           onClick={() => onItemClick(item)}
-          className="aspect-square overflow-hidden bg-[#0a0a0a] block w-full"
+          className="relative aspect-square overflow-hidden bg-[#0a0a0a] block w-full"
         >
           <img
             src={item.image_url}
             alt=""
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover will-change-transform"
+            draggable={false}
           />
+          {item.status === 'sold' && (
+            <>
+              <div className="absolute inset-0 bg-black/55 pointer-events-none" />
+              <div className="absolute top-5 left-[-32px] w-32 bg-white/90 text-[#141414] text-[10px] font-semibold tracking-[0.25em] text-center py-1.5 rotate-[-45deg] pointer-events-none z-10">
+                SOLD
+              </div>
+            </>
+          )}
         </button>
       ))}
     </div>
