@@ -126,6 +126,9 @@ function AvatarCropModal({ imageUrl, onSave, onCancel }) {
 
 export default function VendorSettings() {
   const navigate = useNavigate()
+  const baseUrl = window.location.origin.startsWith('http')
+    ? window.location.origin
+    : `https://${window.location.origin}`
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [vendor, setVendor] = useState(null)
@@ -153,6 +156,7 @@ export default function VendorSettings() {
   const avatarInputRef = useRef(null)
 
   useEffect(() => {
+    console.log('baseUrl:', baseUrl)
     load()
   }, [])
 
@@ -282,7 +286,7 @@ export default function VendorSettings() {
   }
 
   const copyInviteLink = async (code) => {
-    const url = `${window.location.origin}/signup?invite=${code}`
+    const url = `${baseUrl}/signup?invite=${code}`
     try {
       await navigator.clipboard.writeText(url)
     } catch {
@@ -513,7 +517,7 @@ export default function VendorSettings() {
               {inviteCodes.filter(c => !c.used_by).map(c => (
                 <div key={c.code} className="flex items-center gap-2 bg-white/3 border border-white/5 rounded-lg px-3 py-2">
                   <span className="text-white/40 text-xs tracking-wide font-mono flex-1 truncate">
-                    {window.location.origin}/signup?invite={c.code}
+                    {baseUrl}/signup?invite={c.code}
                   </span>
                   <button
                     onClick={() => copyInviteLink(c.code)}
@@ -544,13 +548,13 @@ export default function VendorSettings() {
             <div className="bg-white rounded-2xl p-6 flex flex-col items-center gap-4">
               <QRCodeCanvas
                 ref={qrRef}
-                value={`${window.location.origin}/v/${profile.handle}`}
+                value={`${baseUrl}/v/${profile.handle}`}
                 size={200}
                 level="M"
                 includeMargin={false}
               />
               <p className="text-[#141414]/50 text-xs tracking-wide">
-                {window.location.origin.replace(/^https?:\/\//, '')}/v/{profile.handle}
+                {baseUrl.replace(/^https?:\/\//, '')}/v/{profile.handle}
               </p>
             </div>
             <div className="flex gap-2 mt-3">
@@ -570,7 +574,7 @@ export default function VendorSettings() {
               </button>
               <button
                 onClick={async () => {
-                  const url = `${window.location.origin}/v/${profile.handle}`
+                  const url = `${baseUrl}/v/${profile.handle}`
                   try {
                     await navigator.clipboard.writeText(url)
                   } catch {
