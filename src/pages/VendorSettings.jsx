@@ -544,13 +544,13 @@ export default function VendorSettings() {
             <div className="bg-white rounded-2xl p-6 flex flex-col items-center gap-4">
               <QRCodeCanvas
                 ref={qrRef}
-                value={`${import.meta.env.VITE_PUBLIC_URL || window.location.origin}/v/${profile.handle}`}
+                value={`${window.location.origin}/v/${profile.handle}`}
                 size={200}
                 level="M"
                 includeMargin={false}
               />
               <p className="text-[#141414]/50 text-xs tracking-wide">
-                {(import.meta.env.VITE_PUBLIC_URL || window.location.origin).replace(/^https?:\/\//, '')}/v/{profile.handle}
+                {window.location.origin.replace(/^https?:\/\//, '')}/v/{profile.handle}
               </p>
             </div>
             <div className="flex gap-2 mt-3">
@@ -570,7 +570,7 @@ export default function VendorSettings() {
               </button>
               <button
                 onClick={async () => {
-                  const url = `${import.meta.env.VITE_PUBLIC_URL || window.location.origin}/v/${profile.handle}`
+                  const url = `${window.location.origin}/v/${profile.handle}`
                   try {
                     await navigator.clipboard.writeText(url)
                   } catch {
